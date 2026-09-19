@@ -1,0 +1,30 @@
+[project]
+name = "data-agent"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "core",
+    "agent",
+    "sandbox",
+    "tools",
+    "api",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+core = { workspace = true }
+agent = { workspace = true }
+sandbox = { workspace = true }
+tools = { workspace = true }
+api = { workspace = true }
+
+[tool.uv.workspace]
+members = ["apps/*", "packages/*"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.7",
+    "pytest>=8.3",
+]
