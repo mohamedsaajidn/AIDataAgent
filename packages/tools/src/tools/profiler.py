@@ -17,6 +17,26 @@ _BOOLEAN_TOKENS = {"true", "false", "yes", "no", "y", "n", "0", "1"}
 ALLOWED_TYPES = {"id", "categorical", "continuous", "datetime", "boolean", "text"}
 
 
+def coerce_types(df: pd.DataFrame, profiles: list[dict]) -> pd.DataFrame:
+    """Applies the final inferred_type back onto the dataframe before it's persisted.
+
+    Profiling can recognize a text column as dates (via _looks_like_datetime)
+    without pandas ever having actually parsed it - without this, the parquet
+    file keeps storing plain strings, and downstream SQL (DuckDB date
+    functions, etc.) breaks on a column it has no way to know is a date.
+    """
+    df = df.copy()
+    for profile in profiles:
+        if profile["inferred_type"] == "datetime":
+            column = profile["name"]
+            if not pd.api.types.is_datetime64_any_dtype(df[column]):
+                df[column] = pd.to_datetime(df[column], errors="coerce", format="mixed")
+                # Keep the catalog's recorded dtype truthful - it was captured
+                # from the pre-coercion column, which is now stale.
+                profile["pandas_dtype"] = str(df[column].dtype)
+    return df
+
+
 def is_plausible_override(inferred_type: str, distinct_count: int) -> bool:
     """Reject an LLM type override that contradicts the column's own cardinality."""
     if inferred_type == "categorical" and distinct_count > _CATEGORICAL_MAX_DISTINCT:

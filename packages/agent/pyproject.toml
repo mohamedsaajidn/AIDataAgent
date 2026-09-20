@@ -6,10 +6,12 @@ dependencies = [
     "langgraph>=0.2",
     "langchain-openai>=0.2",
     "core",
+    "sandbox",
 ]
 
 [tool.uv.sources]
 core = { workspace = true }
+sandbox = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
