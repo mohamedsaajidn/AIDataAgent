@@ -1,9 +1,21 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from sqlalchemy import text
 
+from api.routes.datasets import router as datasets_router
+from core.models import Base
 from core.storage import get_engine, get_redis_client, get_s3_client
 
-app = FastAPI(title="Data Agent API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(get_engine())
+    yield
+
+
+app = FastAPI(title="Data Agent API", lifespan=lifespan)
+app.include_router(datasets_router)
 
 
 @app.get("/health")
