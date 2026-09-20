@@ -14,11 +14,15 @@ Python in an isolated sandbox rather than translating everything to SQL.
 ```
 apps/api/        FastAPI backend (package name: api)
 apps/worker/      async job runner (added later)
-packages/core/     Settings, DB/S3/Redis client factories — the ONLY place
+packages/core/     Settings, DB/S3/Redis client factories, and the catalog
+                   ORM models (Dataset/DatasetVersion/Column) — the ONLY place
                    connection details are read from
-packages/agent/    LangGraph graphs + the OpenRouter LLM wrapper
+packages/agent/    LangGraph graphs, the OpenRouter LLM wrapper, and any
+                   other LLM-calling logic (e.g. schema review)
 packages/sandbox/  isolated code-execution engine (Phase 2+)
-packages/tools/    profiler, chart-spec, join, versioning tools (Phase 1+)
+packages/tools/    pure, deterministic data operations only, no LLM calls:
+                   excel/csv parsing, profiler heuristics, PII scan (Presidio),
+                   chart-spec, join, versioning tools (later phases)
 scripts/          one-off scripts (smoke tests, etc.), run from repo root
 ```
 
@@ -39,8 +43,31 @@ project (`[tool.uv] package = false`) that depends on every member so a single
   bare `python` that isn't `uv run python`, since that bypasses the workspace
   venv.
 - Run the API: `uv run uvicorn api.main:app --reload --port 8000` (from repo root).
+  `--reload`'s file-watcher has shown Windows-specific flakiness in this repo
+  (two files saved close together can trigger only one reload, silently
+  leaving one module stale) - if a code change doesn't seem to take effect,
+  don't assume the fix is wrong: kill the process (check both the reloader
+  PID and its child worker PID via `netstat -ano` / `tasklist`, both can end
+  up holding the port) and do a clean `uv run uvicorn ...` restart before
+  concluding anything.
 - If `uv` isn't on PATH in a given shell, fall back to `python -m uv <args>` —
   do not reinstall or shadow it another way.
+- This machine sits behind a TLS-intercepting corporate proxy (Zscaler) that
+  breaks certificate validation for some external hosts — notably GitHub
+  Releases (spaCy model wheels, etc.), though not PyPI itself. This is fixed
+  via `system-certs = true` under `[tool.uv]` in the root `pyproject.toml` —
+  checked into the repo, so it applies no matter which terminal/shell runs
+  `uv`. (An earlier attempt set `UV_SYSTEM_CERTS=1` as a permanent user
+  environment variable instead; that turned out unreliable in practice —
+  freshly opened terminals repeatedly failed to inherit it — which is why
+  it moved into project config. If a TLS/certificate error still shows up,
+  check that `system-certs = true` is actually present in the root
+  `pyproject.toml` before assuming anything else is wrong — never disable
+  TLS verification instead.)
+- A spaCy model (`en_core_web_sm`, used by Presidio for PII detection) is
+  declared as a direct-URL dependency in `packages/tools/pyproject.toml`.
+  Don't `python -m spacy download` it ad hoc — that install doesn't survive
+  `uv sync`, since anything not declared in a `pyproject.toml` gets removed.
 
 ## Local infra = docker-shaped cloud infra, always
 

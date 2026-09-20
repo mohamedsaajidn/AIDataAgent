@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "deepseek/deepseek-v4-flash-0731:free"
+    # Free-tier OpenRouter models are shared/queued infrastructure - even a
+    # single small column can legitimately take 20-30s, so this needs to be
+    # generous enough to not misfire on normal (if slow) responses.
+    openrouter_timeout_seconds: int = 45
 
     @property
     def postgres_dsn(self) -> str:
