@@ -73,3 +73,39 @@ class Column(Base):
     description: Mapped[str | None] = mapped_column(String, nullable=True)
 
     dataset_version: Mapped["DatasetVersion"] = relationship(back_populates="columns")
+
+
+class ChatSession(Base):
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    dataset_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("datasets.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    messages: Mapped[list["ChatMessage"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan", order_by="ChatMessage.created_at"
+    )
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("chat_sessions.id"), nullable=False)
+    role: Mapped[str] = mapped_column(String, nullable=False)  # "user" | "assistant"
+    content: Mapped[str] = mapped_column(String, nullable=False)
+
+    # Assistant-message-only fields - always populated alongside an answer so
+    # the UI can show "how did it get this" next to "what's the answer".
+    route: Mapped[str | None] = mapped_column(String, nullable=True)  # "sql" | "pandas" | "clarify"
+    generated_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    result_json: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(String, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    session: Mapped["ChatSession"] = relationship(back_populates="messages")

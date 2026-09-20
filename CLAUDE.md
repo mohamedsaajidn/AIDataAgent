@@ -15,11 +15,36 @@ Python in an isolated sandbox rather than translating everything to SQL.
 apps/api/        FastAPI backend (package name: api)
 apps/worker/      async job runner (added later)
 packages/core/     Settings, DB/S3/Redis client factories, and the catalog
-                   ORM models (Dataset/DatasetVersion/Column) — the ONLY place
-                   connection details are read from
+                   ORM models (Dataset/DatasetVersion/Column/ChatSession/
+                   ChatMessage) — the ONLY place connection details are read from
 packages/agent/    LangGraph graphs, the OpenRouter LLM wrapper, and any
-                   other LLM-calling logic (e.g. schema review)
-packages/sandbox/  isolated code-execution engine (Phase 2+)
+                   other LLM-calling logic. `schema_context.py` renders
+                   catalog metadata (names/types/descriptions/distinct
+                   counts/bounded sample values) into prompt text — this is
+                   the ONLY dataset-derived content that ever reaches an LLM
+                   prompt; PII-flagged columns get a warning instead of
+                   sample values. `graphs/qa.py` is the read-only Q&A agent:
+                   plan (routes sql/pandas/clarify) → generate_code → execute
+                   (calls sandbox.run_python) → verify (heuristic result-type
+                   check) → respond, with a retry edge feeding the traceback
+                   back into generate_code (bounded by MAX_ATTEMPTS).
+                   `plan`'s sql/pandas choice is only a hint fed into the
+                   generate_code prompt - it is NEVER enforced, and the model
+                   often ignores it (e.g. writes plain pandas for a question
+                   the router guessed was SQL-shaped). The `route` value
+                   returned to callers is therefore derived from the accepted
+                   code itself (`_effective_route` - `"sql"` iff `"duckdb"`
+                   appears in the code), not from `plan`'s pre-code guess.
+                   Don't reuse `state["route"]` directly as a "what approach
+                   did it use" signal anywhere - always go through
+                   `_effective_route`.
+packages/sandbox/  isolated code-execution engine. `executor.py` runs
+                   arbitrary Python in an ephemeral, hardened Docker
+                   container (no network, read-only root FS, memory/CPU/pids
+                   limits); `blocklist.py` is a static AST pre-check (defense
+                   in depth, not the real boundary); `runner.py` is the
+                   trusted in-container script and gets baked into the image
+                   at build time — see Dockerfile below
 packages/tools/    pure, deterministic data operations only, no LLM calls:
                    excel/csv parsing, profiler heuristics, PII scan (Presidio),
                    chart-spec, join, versioning tools (later phases)
@@ -98,7 +123,7 @@ project (`[tool.uv] package = false`) that depends on every member so a single
 - API keys are read from `.env` via `core.settings`, never hardcoded, never
   logged, never included in a prompt or committed to a file.
 
-## Sandbox execution boundary (non-negotiable once Phase 2 lands)
+## Sandbox execution boundary (non-negotiable)
 
 - Any LLM-generated code that touches a dataset executes only inside the
   sandbox executor in `packages/sandbox` — never via a bare `exec()`/`eval()`
@@ -109,6 +134,22 @@ project (`[tool.uv] package = false`) that depends on every member so a single
 - Original uploaded files and every dataset version are immutable once
   written. A transform always produces a new version; nothing is patched
   in place. Undo = repointing the "active version" pointer, never a delete.
+- Real security boundary is the container (network isolation, read-only root
+  FS, memory/CPU/pids limits) — verified directly in Phase 2 testing (writes
+  to `/etc`, `/app`, and even the read-only `/data` mount all fail with real
+  `Read-only file system`/`Permission denied` OS errors; only `/scratch` is
+  writable). `sandbox.blocklist` is a static AST pre-check on top of that,
+  not a substitute for it — don't rely on it alone for a new attack surface;
+  reason about what the container itself would do first.
+- The sandbox image is a separate build artifact, not part of `uv sync`:
+  rebuild it with `docker build -t dataagent-sandbox:latest packages/sandbox`
+  whenever `packages/sandbox/Dockerfile` or `packages/sandbox/src/sandbox/runner.py`
+  changes — `executor.py` does not auto-rebuild the image, so a stale image
+  silently keeps running the old `runner.py`.
+- Every execution is a brand-new ephemeral container (no warm pool) - cold
+  start is ~0.9-1.0s per run on this machine (measured baseline, Phase 2).
+  Revisit only if this becomes an actual bottleneck; don't add pooling ahead
+  of that.
 
 ## Data handling
 
@@ -120,6 +161,18 @@ project (`[tool.uv] package = false`) that depends on every member so a single
 - Destructive operations (column drop, in-place-feeling overwrite, a join
   that changes row count) require an explicit preview + confirmation step
   once that flow exists — never auto-commit a transform.
+
+## Q&A agent — known scope boundary (as of Phase 3)
+
+`chat_sessions`/`chat_messages` in Postgres persist history, but the agent
+itself is stateless per question - `agent.graphs.qa.ask()` takes only
+`dataset_id` and `question`, with no prior turns threaded into the prompt. A
+follow-up like "what about the median?" can appear to work because the schema
+alone makes the right column obvious, not because the agent actually
+remembers the previous turn - don't mistake that for working conversational
+memory. Real multi-turn context is Phase 6's job (session memory). Don't
+partially bolt on conversation history before then; do it properly, in one
+phase, with the memory design already scoped for it.
 
 ## Code style for this repo
 

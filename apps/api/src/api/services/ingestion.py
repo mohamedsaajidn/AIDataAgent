@@ -11,7 +11,7 @@ from core.settings import get_settings
 from core.storage import get_s3_client
 from tools.excel import load_tabular
 from tools.pii import scan_column
-from tools.profiler import ALLOWED_TYPES, is_plausible_override, profile_dataframe
+from tools.profiler import ALLOWED_TYPES, coerce_types, is_plausible_override, profile_dataframe
 
 try:
     from agent.schema_review import review_columns
@@ -91,7 +91,7 @@ def _ingest_sheet(
 
     profiles = profile_dataframe(df)
     for profile in profiles:
-        is_pii, entities = scan_column(profile["sample_values"])
+        is_pii, entities = scan_column(profile["name"], profile["sample_values"])
         profile["is_pii"] = is_pii
         profile["pii_entities"] = entities
 
@@ -108,6 +108,8 @@ def _ingest_sheet(
         if llm_type in ALLOWED_TYPES and is_plausible_override(llm_type, profile["distinct_count"]):
             profile["inferred_type"] = llm_type
         profile["description"] = review.get("description")
+
+    df = coerce_types(df, profiles)
 
     dataset_id = uuid.uuid4()
     version_id = uuid.uuid4()

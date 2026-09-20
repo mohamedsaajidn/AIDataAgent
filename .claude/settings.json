@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker build *)",
+      "Bash(python -c ' *)",
+      "Bash(curl -s -X POST http://localhost:8000/chat/ask -H 'Content-Type: application/json' -d '{\"dataset_id\": \"f0421304-ceb3-4661-921e-3ac68b063ad5\", \"question\": \"What is the average salary?\"}' -o /c/Users/MOHAME~1.LV/AppData/Local/Temp/claude/d--AI-Projects-VoiceAgent/822d4758-7578-4385-b929-06af3fb85bef/scratchpad/q1.json)",
+      "Bash(python -m json.tool \"C:\\\\Users\\\\MOHAME~1.LV\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--AI-Projects-VoiceAgent\\\\822d4758-7578-4385-b929-06af3fb85bef\\\\scratchpad\\\\q1.json\")",
+      "Bash(curl -s -X POST http://localhost:8000/chat/ask -H 'Content-Type: application/json' -d '{\"dataset_id\": \"f0421304-ceb3-4661-921e-3ac68b063ad5\", \"question\": \"How many employees are in the Engineering department?\"}' -o /c/Users/MOHAME~1.LV/AppData/Local/Temp/claude/d--AI-Projects-VoiceAgent/822d4758-7578-4385-b929-06af3fb85bef/scratchpad/q2.json)",
+      "Bash(curl -s -X POST http://localhost:8000/chat/ask -H 'Content-Type: application/json' -d '{\"dataset_id\": \"f0421304-ceb3-4661-921e-3ac68b063ad5\", \"question\": \"How many employees were hired in each year?\"}' -o /c/Users/MOHAME~1.LV/AppData/Local/Temp/claude/d--AI-Projects-VoiceAgent/822d4758-7578-4385-b929-06af3fb85bef/scratchpad/q3.json)",
+      "Bash(python -m json.tool \"C:\\\\Users\\\\MOHAME~1.LV\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--AI-Projects-VoiceAgent\\\\822d4758-7578-4385-b929-06af3fb85bef\\\\scratchpad\\\\q3.json\")",
+      "Bash(curl -s -X POST http://localhost:8000/chat/ask -H 'Content-Type: application/json' -d '{\"dataset_id\": \"1be52ce9-35e5-4ad9-a317-d97beb1b537b\", \"question\": \"How many employees were hired in each year?\"}' -o /c/Users/MOHAME~1.LV/AppData/Local/Temp/claude/d--AI-Projects-VoiceAgent/822d4758-7578-4385-b929-06af3fb85bef/scratchpad/q3v2.json)",
+      "Bash(python -m json.tool \"C:\\\\Users\\\\MOHAME~1.LV\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--AI-Projects-VoiceAgent\\\\822d4758-7578-4385-b929-06af3fb85bef\\\\scratchpad\\\\q3v2.json\")",
+      "Bash(curl -s -X POST http://localhost:8000/chat/ask -H 'Content-Type: application/json' -d '{\"dataset_id\": \"1be52ce9-35e5-4ad9-a317-d97beb1b537b\", \"question\": \"What is the average of the employer?\"}' -o /c/Users/MOHAME~1.LV/AppData/Local/Temp/claude/d--AI-Projects-VoiceAgent/822d4758-7578-4385-b929-06af3fb85bef/scratchpad/q_ambiguous.json)",
+      "Bash(python -m json.tool \"C:\\\\Users\\\\MOHAME~1.LV\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--AI-Projects-VoiceAgent\\\\822d4758-7578-4385-b929-06af3fb85bef\\\\scratchpad\\\\q_ambiguous.json\")",
+      "Bash(curl -s -X POST http://localhost:8000/chat/ask -H 'Content-Type: application/json' -d '{\"dataset_id\": \"1be52ce9-35e5-4ad9-a317-d97beb1b537b\", \"question\": \"What is the average number of days between consecutive hire dates when sorted by hire date?\"}' -o /c/Users/MOHAME~1.LV/AppData/Local/Temp/claude/d--AI-Projects-VoiceAgent/822d4758-7578-4385-b929-06af3fb85bef/scratchpad/q_tricky.json)",
+      "Bash(python -m json.tool \"C:\\\\Users\\\\MOHAME~1.LV\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--AI-Projects-VoiceAgent\\\\822d4758-7578-4385-b929-06af3fb85bef\\\\scratchpad\\\\q_tricky.json\")",
+      "Bash(curl -s -X POST http://localhost:8000/chat/ask -H 'Content-Type: application/json' -d '{\"dataset_id\": \"1be52ce9-35e5-4ad9-a317-d97beb1b537b\", \"question\": \"How many employees were hired in each year? Give me a chart for this.\"}' -o /c/Users/MOHAME~1.LV/AppData/Local/Temp/claude/d--AI-Projects-VoiceAgent/822d4758-7578-4385-b929-06af3fb85bef/scratchpad/q_chart.json)",
+      "Bash(python -m json.tool \"C:\\\\Users\\\\MOHAME~1.LV\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--AI-Projects-VoiceAgent\\\\822d4758-7578-4385-b929-06af3fb85bef\\\\scratchpad\\\\q_chart.json\")",
+      "Bash(curl -s -w '\\\\nHTTP_STATUS:%{http_code}\\\\n' -X POST http://localhost:8000/chat/ask -H 'Content-Type: application/json' -d '{\"dataset_id\": \"82d3c767-bde4-4852-8113-ed42aaac04f6\", \"question\": \"Give me the subcategory level breakdown of product count\"}' -o /c/Users/MOHAME~1.LV/AppData/Local/Temp/claude/d--AI-Projects-VoiceAgent/822d4758-7578-4385-b929-06af3fb85bef/scratchpad/repro_original.json)",
+      "Bash(python -m json.tool \"C:\\\\Users\\\\MOHAME~1.LV\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--AI-Projects-VoiceAgent\\\\822d4758-7578-4385-b929-06af3fb85bef\\\\scratchpad\\\\repro_original.json\")",
+      "Bash(curl -s -X POST http://localhost:8000/chat/ask -H 'Content-Type: application/json' -d '{\"dataset_id\": \"82d3c767-bde4-4852-8113-ed42aaac04f6\", \"question\": \"Give me the subcategory level breakdown of product count\"}' -o /c/Users/MOHAME~1.LV/AppData/Local/Temp/claude/d--AI-Projects-VoiceAgent/822d4758-7578-4385-b929-06af3fb85bef/scratchpad/subcat_v2.json)",
+      "Bash(taskkill //F //PID 40628)"
+    ]
+  }
+}
