@@ -45,6 +45,14 @@ class DatasetVersion(Base):
     row_count: Mapped[int] = mapped_column(Integer, nullable=False)
     column_count: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Lineage: how this version came to exist. "upload" for version 1; every
+    # later version is derived from exactly one parent via a transform/join.
+    source: Mapped[str] = mapped_column(String, nullable=False, default="upload")
+    parent_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("dataset_versions.id", use_alter=True, name="fk_version_parent"), nullable=True
+    )
+    generated_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    diff_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     dataset: Mapped["Dataset"] = relationship(back_populates="versions", foreign_keys=[dataset_id])
@@ -105,11 +113,54 @@ class ChatMessage(Base):
     prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # Plotly HTML is self-contained text (not binary), so it's stored and
-    # returned directly as a string field - no separate binary-artifact
-    # endpoint needed for the checklist's "retrievable from a past session".
-    chart_html: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Self-contained HTML (Plotly charts, ydata-profiling EDA reports) is
+    # text, not binary, so it's stored and returned directly as a string
+    # field - no separate binary-artifact endpoint needed for the checklist's
+    # "retrievable from a past session". Named generically (not chart_html)
+    # since EDA reports are HTML artifacts too, not just charts.
+    artifact_html: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Set when this message proposed a transform/join awaiting confirmation.
+    pending_transform_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pending_transforms.id"), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     session: Mapped["ChatSession"] = relationship(back_populates="messages")
+
+
+class PendingTransform(Base):
+    """A proposed transform/join that has been generated and executed against
+    a copy, with the result sitting in S3 under a pending (not yet versioned)
+    key - nothing here is visible to any Q&A query until confirmed. Confirm
+    turns this into a real DatasetVersion; reject just discards it. Preview
+    data (diff/row-col counts) is computed and stored at propose time, not
+    recomputed at confirm time, so what the user approved is exactly what
+    gets committed.
+    """
+
+    __tablename__ = "pending_transforms"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    dataset_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("datasets.id"), nullable=False)
+    base_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("dataset_versions.id"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chat_sessions.id"), nullable=True
+    )
+    kind: Mapped[str] = mapped_column(String, nullable=False)  # "transform" | "join"
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    generated_code: Mapped[str] = mapped_column(Text, nullable=False)
+    spec: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # join parameters, when kind == "join"
+    pending_parquet_key: Mapped[str] = mapped_column(String, nullable=False)
+    diff_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    row_count_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    row_count_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    column_count_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    column_count_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    columns_added: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    columns_removed: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending")  # pending|confirmed|rejected
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

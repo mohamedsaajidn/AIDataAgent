@@ -4,8 +4,9 @@ import uuid
 from sqlalchemy.orm import selectinload
 
 from agent.graphs.qa import ask as ask_agent
+from agent.schema_context import get_active_dataset
 from core.db import get_session
-from core.models import ChatMessage, ChatSession
+from core.models import ChatMessage, ChatSession, PendingTransform
 
 
 def ask_question(dataset_id: str, question: str, session_id: str | None = None) -> dict:
@@ -22,8 +23,34 @@ def ask_question(dataset_id: str, question: str, session_id: str | None = None) 
         session.add(ChatMessage(id=uuid.uuid4(), session_id=chat_session.id, role="user", content=question))
         session_id_value = chat_session.id
 
+    _, base_version = get_active_dataset(dataset_id)
     result = ask_agent(dataset_id, question)
     latency_ms = int(result.duration_seconds * 1000)
+
+    pending_transform_id = None
+    if result.route in ("transform", "join") and result.diff and result.pending_parquet_key:
+        pending_transform_id = uuid.uuid4()
+        with get_session() as session:
+            session.add(
+                PendingTransform(
+                    id=pending_transform_id,
+                    dataset_id=uuid.UUID(dataset_id),
+                    base_version_id=base_version.id,
+                    session_id=session_id_value,
+                    kind=result.route,
+                    question=question,
+                    generated_code=result.code or "",
+                    spec=result.join_spec if result.route == "join" else None,
+                    pending_parquet_key=result.pending_parquet_key,
+                    diff_summary=result.diff["summary"],
+                    row_count_before=result.diff["row_count_before"],
+                    row_count_after=result.diff["row_count_after"],
+                    column_count_before=result.diff["column_count_before"],
+                    column_count_after=result.diff["column_count_after"],
+                    columns_added=result.diff["columns_added"],
+                    columns_removed=result.diff["columns_removed"],
+                )
+            )
 
     with get_session() as session:
         session.add(
@@ -40,7 +67,8 @@ def ask_question(dataset_id: str, question: str, session_id: str | None = None) 
                 prompt_tokens=result.prompt_tokens,
                 completion_tokens=result.completion_tokens,
                 attempts=result.attempts,
-                chart_html=result.chart_html,
+                artifact_html=result.artifact_html,
+                pending_transform_id=pending_transform_id,
             )
         )
 
@@ -55,7 +83,9 @@ def ask_question(dataset_id: str, question: str, session_id: str | None = None) 
         "prompt_tokens": result.prompt_tokens,
         "completion_tokens": result.completion_tokens,
         "attempts": result.attempts,
-        "chart_html": result.chart_html,
+        "artifact_html": result.artifact_html,
+        "diff": result.diff,
+        "pending_transform_id": str(pending_transform_id) if pending_transform_id else None,
     }
 
 
@@ -81,7 +111,8 @@ def get_session_history(session_id: str) -> dict:
                     "prompt_tokens": m.prompt_tokens,
                     "completion_tokens": m.completion_tokens,
                     "attempts": m.attempts,
-                    "chart_html": m.chart_html,
+                    "artifact_html": m.artifact_html,
+                    "pending_transform_id": str(m.pending_transform_id) if m.pending_transform_id else None,
                     "created_at": m.created_at.isoformat() if m.created_at else None,
                 }
                 for m in chat_session.messages

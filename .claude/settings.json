@@ -28,7 +28,18 @@
       "Bash(curl -s -o /dev/null -w \"HTTP_STATUS:%{http_code}\\\\nCONTENT_TYPE:%{content_type}\\\\n\" http://localhost:8899/chart.html)",
       "Bash(curl -s http://localhost:8899/chart.html)",
       "Bash(curl -s -o /dev/null -w \"HTTP_STATUS:%{http_code}\\\\nTIME:%{time_total}\\\\n\" --max-time 15 https://cdn.plot.ly/plotly-4.1.1.min.js)",
-      "Bash(curl -s -o /dev/null -w \"HTTP_STATUS:%{http_code}\\\\nTIME:%{time_total}\\\\n\" --max-time 15 https://github.com)"
+      "Bash(curl -s -o /dev/null -w \"HTTP_STATUS:%{http_code}\\\\nTIME:%{time_total}\\\\n\" --max-time 15 https://github.com)",
+      "Bash(UV_SYSTEM_CERTS=1 uv run python -c \"from agent.graphs.qa import build_qa_graph, ask, QAResult; g = build_qa_graph\\(\\); print\\('graph built OK, nodes:', len\\(g.get_graph\\(\\).nodes\\)\\)\")",
+      "Bash(UV_SYSTEM_CERTS=1 uv run --no-sync python -c \"from agent.graphs.qa import build_qa_graph, ask, QAResult; g = build_qa_graph\\(\\); print\\('graph built OK, nodes:', len\\(g.get_graph\\(\\).nodes\\)\\)\")",
+      "Bash(UV_SYSTEM_CERTS=1 uv run --no-sync python -c ' *)",
+      "Bash(curl -s http://localhost:8000/datasets/6fab75e1-ae16-44ec-bf8a-5b5aed75f0db)",
+      "Bash(curl -s http://localhost:8000/datasets/26937361-fc5c-4a15-8e50-a1b13cb578f5)",
+      "Bash(curl -s http://localhost:8000/datasets/5a4e52fe-1f45-46a6-81fd-420bb4f3eecf)",
+      "Bash(curl -s -X POST http://localhost:8000/transforms/6a39d3c9-0e98-42bb-8558-2dd1dcf74180/confirm)",
+      "Bash(curl -s http://localhost:8000/datasets/c7ac70dc-54fc-46e1-85ad-97ad0f43507e)",
+      "Bash(curl -s -X POST \"http://localhost:8000/transforms/44f68c34-2aa7-4df7-9ea0-a8a9c2221813/confirm\")",
+      "Bash(curl -s -X POST \"http://localhost:8000/transforms/23d54f26-4040-4f8d-9a59-474f79562f20/confirm\")",
+      "Bash(taskkill //F //PID 32788)"
     ]
   }
 }
