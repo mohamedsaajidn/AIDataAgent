@@ -29,6 +29,7 @@ dependencies = [
     { name = "langchain-openai" },
     { name = "langgraph" },
     { name = "sandbox" },
+    { name = "tools" },
 ]
 
 [package.metadata]
@@ -37,6 +38,7 @@ requires-dist = [
     { name = "langchain-openai", specifier = ">=0.2" },
     { name = "langgraph", specifier = ">=0.2" },
     { name = "sandbox", editable = "packages/sandbox" },
+    { name = "tools", editable = "packages/tools" },
 ]
 
 [[package]]
