@@ -19,7 +19,14 @@
       "Bash(curl -s -w '\\\\nHTTP_STATUS:%{http_code}\\\\n' -X POST http://localhost:8000/chat/ask -H 'Content-Type: application/json' -d '{\"dataset_id\": \"82d3c767-bde4-4852-8113-ed42aaac04f6\", \"question\": \"Give me the subcategory level breakdown of product count\"}' -o /c/Users/MOHAME~1.LV/AppData/Local/Temp/claude/d--AI-Projects-VoiceAgent/822d4758-7578-4385-b929-06af3fb85bef/scratchpad/repro_original.json)",
       "Bash(python -m json.tool \"C:\\\\Users\\\\MOHAME~1.LV\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--AI-Projects-VoiceAgent\\\\822d4758-7578-4385-b929-06af3fb85bef\\\\scratchpad\\\\repro_original.json\")",
       "Bash(curl -s -X POST http://localhost:8000/chat/ask -H 'Content-Type: application/json' -d '{\"dataset_id\": \"82d3c767-bde4-4852-8113-ed42aaac04f6\", \"question\": \"Give me the subcategory level breakdown of product count\"}' -o /c/Users/MOHAME~1.LV/AppData/Local/Temp/claude/d--AI-Projects-VoiceAgent/822d4758-7578-4385-b929-06af3fb85bef/scratchpad/subcat_v2.json)",
-      "Bash(taskkill //F //PID 40628)"
+      "Bash(taskkill //F //PID 40628)",
+      "Bash(curl -s http://localhost:8000/chat/sessions/__TRACKED_VAR__ -o /c/Users/MOHAME~1.LV/AppData/Local/Temp/claude/d--AI-Projects-VoiceAgent/822d4758-7578-4385-b929-06af3fb85bef/scratchpad/session_history.json)",
+      "Bash(taskkill //F //PID 22688)",
+      "Bash(taskkill //F //PID 41536)",
+      "Bash(curl -s http://localhost:8000/chat/sessions/__TRACKED_VAR__)",
+      "Bash(curl -s -o /tmp/plotly_cdn.js -w \"HTTP_STATUS:%{http_code}\\\\nSIZE:%{size_download}\\\\n\" https://cdn.plot.ly/plotly-4.1.1.min.js)",
+      "Bash(curl -s -o /dev/null -w \"HTTP_STATUS:%{http_code}\\\\nCONTENT_TYPE:%{content_type}\\\\n\" http://localhost:8899/chart.html)",
+      "Bash(curl -s http://localhost:8899/chart.html)"
     ]
   }
 }

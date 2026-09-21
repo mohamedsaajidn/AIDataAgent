@@ -45,3 +45,14 @@ def build_schema_context(dataset_id: str) -> tuple[str, str]:
         lines.append("".join(pieces))
 
     return dataset.name, "\n".join(lines)
+
+
+def get_column_profiles(dataset_id: str) -> dict[str, dict]:
+    """Structured (not prompt-text) column metadata, for deterministic
+    validation code (e.g. chart spec validation) rather than LLM prompts.
+    """
+    _, version = get_active_dataset(dataset_id)
+    return {
+        c.name: {"inferred_type": c.inferred_type, "distinct_count": c.distinct_count, "null_pct": c.null_pct}
+        for c in version.columns
+    }

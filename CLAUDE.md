@@ -37,7 +37,37 @@ packages/agent/    LangGraph graphs, the OpenRouter LLM wrapper, and any
                    appears in the code), not from `plan`'s pre-code guess.
                    Don't reuse `state["route"]` directly as a "what approach
                    did it use" signal anywhere - always go through
-                   `_effective_route`.
+                   `_effective_route`. For a "chart" route, the LLM first
+                   fills in a small spec (chart_type/x/y/agg/filters,
+                   `tools.chart_spec`) - chart_type can name ANYTHING (the
+                   prompt allows "radar", "heatmap", etc., not just the
+                   structurally-supported set). If chart_type normalizes to
+                   one of `tools.chart_spec.SUPPORTED_CHART_TYPES`
+                   (histogram/bar/pie/donut/scatter/line/area/box/violin), it
+                   is validated/auto-corrected against real column types (not
+                   cardinality alone - an id or continuous column is wrong by
+                   type regardless of distinct-value count) and
+                   `tools.chart_render` deterministically generates the
+                   actual plotly code - the LLM never writes plotting code
+                   for these. Otherwise it falls back to
+                   `_node_generate_freehand_chart`, which DOES let the LLM
+                   write plotting code directly (there's no hand-written
+                   validator for every conceivable chart type, and trying to
+                   build one for each new ask doesn't scale) - but it reuses
+                   the same execute→verify→retry loop (so a first-attempt bug,
+                   e.g. forgetting to register a dataframe with duckdb before
+                   querying it, gets a real chance to self-correct) and its
+                   prompt requires the response to explicitly state any
+                   assumption made about an ambiguous request rather than
+                   silently substituting something. `_effective_route` tags
+                   these responses `"chart_freehand"` (never bare `"chart"`)
+                   so it's always auditable which charts went through real
+                   validation versus best-effort generation - preserve that
+                   distinction in any future change here, don't collapse it.
+                   When a genuinely new chart type turns out to be requested
+                   often (check via the `chart_freehand`-tagged rows in
+                   `chat_messages`), that's the signal to promote it into
+                   `chart_spec.py`/`chart_render.py`, not to guess upfront.
 packages/sandbox/  isolated code-execution engine. `executor.py` runs
                    arbitrary Python in an ephemeral, hardened Docker
                    container (no network, read-only root FS, memory/CPU/pids
@@ -47,7 +77,14 @@ packages/sandbox/  isolated code-execution engine. `executor.py` runs
                    at build time — see Dockerfile below
 packages/tools/    pure, deterministic data operations only, no LLM calls:
                    excel/csv parsing, profiler heuristics, PII scan (Presidio),
-                   chart-spec, join, versioning tools (later phases)
+                   chart_spec.py (validates/auto-corrects a chart request
+                   against real column types), chart_render.py (turns a
+                   validated spec into actual plotly code - embed every
+                   value via `repr()`, NEVER `json.dumps()`: `json.dumps(None)`
+                   is `"null"`, not valid Python, and silently produces a
+                   NameError at execution time, not a caught error), join/
+                   versioning tools (later phases). Agent may depend on
+                   tools (one-directional); tools must never import agent.
 scripts/          one-off scripts (smoke tests, etc.), run from repo root
 ```
 

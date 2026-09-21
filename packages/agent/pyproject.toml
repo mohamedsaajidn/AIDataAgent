@@ -7,11 +7,13 @@ dependencies = [
     "langchain-openai>=0.2",
     "core",
     "sandbox",
+    "tools",
 ]
 
 [tool.uv.sources]
 core = { workspace = true }
 sandbox = { workspace = true }
+tools = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

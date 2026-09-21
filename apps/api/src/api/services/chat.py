@@ -40,6 +40,7 @@ def ask_question(dataset_id: str, question: str, session_id: str | None = None) 
                 prompt_tokens=result.prompt_tokens,
                 completion_tokens=result.completion_tokens,
                 attempts=result.attempts,
+                chart_html=result.chart_html,
             )
         )
 
@@ -54,6 +55,7 @@ def ask_question(dataset_id: str, question: str, session_id: str | None = None) 
         "prompt_tokens": result.prompt_tokens,
         "completion_tokens": result.completion_tokens,
         "attempts": result.attempts,
+        "chart_html": result.chart_html,
     }
 
 
@@ -79,6 +81,7 @@ def get_session_history(session_id: str) -> dict:
                     "prompt_tokens": m.prompt_tokens,
                     "completion_tokens": m.completion_tokens,
                     "attempts": m.attempts,
+                    "chart_html": m.chart_html,
                     "created_at": m.created_at.isoformat() if m.created_at else None,
                 }
                 for m in chat_session.messages
