@@ -120,6 +120,7 @@ Return ONLY a JSON object with these keys:
 - "y": a numeric column name for the y-axis/value, or null if not needed (e.g. a histogram, or a count-based chart)
 - "agg": one of "count", "sum", "mean", "median", or null
 - "filters": a list of {{"column": ..., "op": "eq"|"ne"|"gt"|"gte"|"lt"|"lte"|"in", "value": ...}} objects, or an empty list
+- "date_part": one of "year", "month", "quarter", or null - set this when x is a date column and the question asks for a breakdown/trend at a coarser granularity than individual exact dates (e.g. "per year", "by month", "each quarter", "yearly trend"). Only applies to bar/pie/donut/line/area charts. Leave null otherwise - do not set it just because x happens to be a date.
 - "title": a short chart title
 
 Guidance for the common types:

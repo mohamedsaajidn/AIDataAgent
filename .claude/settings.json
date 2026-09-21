@@ -26,7 +26,9 @@
       "Bash(curl -s http://localhost:8000/chat/sessions/__TRACKED_VAR__)",
       "Bash(curl -s -o /tmp/plotly_cdn.js -w \"HTTP_STATUS:%{http_code}\\\\nSIZE:%{size_download}\\\\n\" https://cdn.plot.ly/plotly-4.1.1.min.js)",
       "Bash(curl -s -o /dev/null -w \"HTTP_STATUS:%{http_code}\\\\nCONTENT_TYPE:%{content_type}\\\\n\" http://localhost:8899/chart.html)",
-      "Bash(curl -s http://localhost:8899/chart.html)"
+      "Bash(curl -s http://localhost:8899/chart.html)",
+      "Bash(curl -s -o /dev/null -w \"HTTP_STATUS:%{http_code}\\\\nTIME:%{time_total}\\\\n\" --max-time 15 https://cdn.plot.ly/plotly-4.1.1.min.js)",
+      "Bash(curl -s -o /dev/null -w \"HTTP_STATUS:%{http_code}\\\\nTIME:%{time_total}\\\\n\" --max-time 15 https://github.com)"
     ]
   }
 }

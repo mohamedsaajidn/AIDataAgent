@@ -85,6 +85,26 @@ packages/tools/    pure, deterministic data operations only, no LLM calls:
                    NameError at execution time, not a caught error), join/
                    versioning tools (later phases). Agent may depend on
                    tools (one-directional); tools must never import agent.
+                   A ChartSpec's `date_part` (year/month/quarter,
+                   DATE_PART_CHART_TYPES = bar/pie/donut/line/area only)
+                   buckets a datetime x before grouping - added specifically
+                   because "count per year"-type questions were grouping by
+                   the exact raw date instead. Two related things to
+                   remember if you touch this code: (1) chart_render's
+                   bar/pie "Other" bucket ALWAYS casts the grouped x column
+                   to `str` before appending the literal string `"Other"` -
+                   without that, a datetime (or a date_part="year" int)
+                   column mixed with that one string value makes Plotly
+                   misdetect the axis type client-side, so the chart writes
+                   successfully (no Python error) but renders blank in the
+                   browser - this class of bug is real and already happened
+                   once, don't reintroduce it in a new render path. (2) the
+                   bar/pie cardinality warning in chart_spec.py is
+                   suppressed when date_part is set, since it's computed
+                   from the *raw* column's distinct_count, not the
+                   post-bucketing count - bucketing usually resolves the
+                   cardinality problem the warning would otherwise
+                   (wrongly) describe.
 scripts/          one-off scripts (smoke tests, etc.), run from repo root
 ```
 
