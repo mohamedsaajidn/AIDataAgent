@@ -14,6 +14,16 @@ _NUMERIC_TYPES = {"continuous"}
 _CATEGORICAL_TYPES = {"categorical", "boolean"}
 _ALLOWED_FILTER_OPS = {"eq", "ne", "gt", "gte", "lt", "lte", "in"}
 
+# Which chart types x plays a "group by this" role in - the only ones where
+# bucketing a date column into a coarser period (year/month/quarter) instead
+# of grouping by the exact date is meaningful. Histogram bins one continuous
+# column directly (no x grouping); scatter plots raw x/y pairs, not groups;
+# box/violin's optional x is dropped entirely for a non-categorical column
+# regardless (see _validate_box) - a real ask, deliberately out of scope for
+# now, see CLAUDE.md.
+DATE_PART_CHART_TYPES = {"bar", "pie", "donut", "line", "area"}
+DATE_PARTS = {"year", "month", "quarter"}
+
 # Matches the profiler's own categorical threshold (tools.profiler) - above
 # this, a bar chart's x-axis stops being readable as individual bars.
 HIGH_CARDINALITY_THRESHOLD = 20
@@ -66,6 +76,7 @@ def validate_chart_spec(spec: dict, columns: dict[str, dict]) -> tuple[dict | No
     y = spec.get("y")
     agg = spec.get("agg")
     filters = spec.get("filters") or []
+    date_part = spec.get("date_part")
 
     if chart_type not in SUPPORTED_CHART_TYPES:
         return None, [f"'{spec.get('chart_type')}' isn't a supported chart type here."]
@@ -77,6 +88,16 @@ def validate_chart_spec(spec: dict, columns: dict[str, dict]) -> tuple[dict | No
     filter_error = _validate_filters(filters, columns)
     if filter_error:
         return None, [filter_error]
+
+    if date_part and date_part not in DATE_PARTS:
+        notes.append(f"'{date_part}' isn't a supported date bucketing option (use year, month, or quarter) - ignoring it.")
+        date_part = None
+    if date_part and (not x or columns[x]["inferred_type"] != "datetime"):
+        notes.append("Ignoring date bucketing since the x column isn't a date.")
+        date_part = None
+    if date_part and chart_type not in DATE_PART_CHART_TYPES:
+        notes.append(f"Date bucketing isn't supported for a {chart_type} chart - ignoring it.")
+        date_part = None
 
     # An id column is a unique-per-row identifier by definition - it can
     # never be a meaningful grouping (bar/pie/donut) or ordering (line/area)
@@ -90,16 +111,28 @@ def validate_chart_spec(spec: dict, columns: dict[str, dict]) -> tuple[dict | No
         ]
 
     if chart_type == "histogram":
-        return _validate_histogram(x, y, agg, filters, columns, notes)
-    if chart_type == "bar":
-        return _validate_bar(x, y, agg, filters, columns, notes)
-    if chart_type in ("pie", "donut"):
-        return _validate_pie(chart_type, x, y, agg, filters, columns, notes)
-    if chart_type == "scatter":
-        return _validate_scatter(x, y, filters, columns, notes)
-    if chart_type in ("line", "area"):
-        return _validate_line(chart_type, x, y, agg, filters, columns, notes)
-    return _validate_box(chart_type, x, y, filters, columns, notes)
+        result, notes = _validate_histogram(x, y, agg, filters, columns, notes)
+    elif chart_type == "bar":
+        result, notes = _validate_bar(x, y, agg, filters, columns, notes, date_part)
+    elif chart_type in ("pie", "donut"):
+        result, notes = _validate_pie(chart_type, x, y, agg, filters, columns, notes, date_part)
+    elif chart_type == "scatter":
+        result, notes = _validate_scatter(x, y, filters, columns, notes)
+    elif chart_type in ("line", "area"):
+        result, notes = _validate_line(chart_type, x, y, agg, filters, columns, notes)
+    else:
+        result, notes = _validate_box(chart_type, x, y, filters, columns, notes)
+
+    # Only survives here if the type-specific validator kept the same x
+    # unmodified in a still-date_part-eligible chart type - true for every
+    # current code path (none of these validators redirect or drop a
+    # datetime x), but re-checked rather than assumed, since a future
+    # redirect added to one of them could otherwise silently smuggle
+    # date_part onto a chart type or column it was never validated against.
+    if result is not None and date_part and result.get("chart_type") in DATE_PART_CHART_TYPES and result.get("x") == x:
+        result["date_part"] = date_part
+
+    return result, notes
 
 
 def _validate_filters(filters: list[dict], columns: dict[str, dict]) -> str | None:
@@ -124,7 +157,7 @@ def _validate_histogram(x, y, agg, filters, columns, notes):
     return {"chart_type": "histogram", "x": x, "y": None, "agg": None, "filters": filters}, notes
 
 
-def _validate_bar(x, y, agg, filters, columns, notes):
+def _validate_bar(x, y, agg, filters, columns, notes, date_part=None):
     if not x:
         return None, ["A bar chart needs a column to group by."]
 
@@ -142,7 +175,14 @@ def _validate_bar(x, y, agg, filters, columns, notes):
     if y and columns[y]["inferred_type"] not in _NUMERIC_TYPES:
         return None, [f"'{y}' isn't numeric, so it can't be aggregated for a bar chart."]
 
-    if x_distinct > HIGH_CARDINALITY_THRESHOLD:
+    # x_distinct is the RAW column's cardinality - once date_part buckets it
+    # down to year/month/quarter at render time, the real post-bucketing
+    # cardinality is almost always far lower (and unknown here, since that
+    # requires the actual data, not just catalog metadata). Warning about
+    # the raw count would usually be wrong once bucketing is about to happen
+    # - the runtime top-N/Other logic in chart_render.py still applies as a
+    # safety net regardless, it just doesn't get a pre-emptive note here.
+    if x_distinct > HIGH_CARDINALITY_THRESHOLD and not date_part:
         notes.append(
             f"'{x}' has {x_distinct} distinct values - showing only the top {BAR_TOP_N} "
             "(by count) grouped with an 'Other' bucket so the chart stays readable."
@@ -151,7 +191,7 @@ def _validate_bar(x, y, agg, filters, columns, notes):
     return {"chart_type": "bar", "x": x, "y": y, "agg": agg or ("sum" if y else "count"), "filters": filters}, notes
 
 
-def _validate_pie(chart_type, x, y, agg, filters, columns, notes):
+def _validate_pie(chart_type, x, y, agg, filters, columns, notes, date_part=None):
     if not x:
         return None, [f"A {chart_type} chart needs a column to group by."]
 
@@ -165,7 +205,9 @@ def _validate_pie(chart_type, x, y, agg, filters, columns, notes):
     if y and columns[y]["inferred_type"] not in _NUMERIC_TYPES:
         return None, [f"'{y}' isn't numeric, so it can't be aggregated for a {chart_type} chart."]
 
-    if x_distinct > PIE_TOP_N:
+    # See _validate_bar - x_distinct is pre-bucketing cardinality, not
+    # meaningful to warn about once date_part is about to collapse it.
+    if x_distinct > PIE_TOP_N and not date_part:
         notes.append(
             f"'{x}' has {x_distinct} distinct values - a {chart_type} chart only stays readable with a "
             f"handful of slices, so showing the top {PIE_TOP_N} grouped with an 'Other' slice."

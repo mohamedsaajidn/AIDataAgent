@@ -28,6 +28,7 @@ dependencies = [
     { name = "core" },
     { name = "langchain-openai" },
     { name = "langgraph" },
+    { name = "pyarrow" },
     { name = "sandbox" },
     { name = "tools" },
 ]
@@ -37,6 +38,7 @@ requires-dist = [
     { name = "core", editable = "packages/core" },
     { name = "langchain-openai", specifier = ">=0.2" },
     { name = "langgraph", specifier = ">=0.2" },
+    { name = "pyarrow", specifier = ">=25.0.1" },
     { name = "sandbox", editable = "packages/sandbox" },
     { name = "tools", editable = "packages/tools" },
 ]

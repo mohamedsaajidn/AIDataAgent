@@ -8,6 +8,7 @@ dependencies = [
     "core",
     "sandbox",
     "tools",
+    "pyarrow>=25.0.1",
 ]
 
 [tool.uv.sources]

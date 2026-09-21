@@ -12,11 +12,17 @@ Python in an isolated sandbox rather than translating everything to SQL.
 ## Repo layout (uv workspace)
 
 ```
-apps/api/        FastAPI backend (package name: api)
+apps/api/        FastAPI backend (package name: api). `services/chat.py` +
+                   `routes/chat.py` own the Q&A/propose flow; `services/transforms.py`
+                   + `routes/transforms.py` own confirm/reject/undo/export for
+                   versioned data (Phase 5) — kept as a separate service/route
+                   pair from chat rather than folded in, since none of it goes
+                   through the agent graph.
 apps/worker/      async job runner (added later)
 packages/core/     Settings, DB/S3/Redis client factories, and the catalog
                    ORM models (Dataset/DatasetVersion/Column/ChatSession/
-                   ChatMessage) — the ONLY place connection details are read from
+                   ChatMessage/PendingTransform) — the ONLY place connection
+                   details are read from
 packages/agent/    LangGraph graphs, the OpenRouter LLM wrapper, and any
                    other LLM-calling logic. `schema_context.py` renders
                    catalog metadata (names/types/descriptions/distinct
@@ -68,6 +74,31 @@ packages/agent/    LangGraph graphs, the OpenRouter LLM wrapper, and any
                    often (check via the `chart_freehand`-tagged rows in
                    `chat_messages`), that's the signal to promote it into
                    `chart_spec.py`/`chart_render.py`, not to guess upfront.
+                   Phase 5 added three more routes to the same plan/execute/
+                   verify/respond graph: `"eda"` (deterministic, no LLM call -
+                   `tools.eda_render.build_eda_code`), `"transform"` (LLM
+                   writes pandas against a `.copy()`, saves
+                   `result.parquet`), and `"join"` (LLM only fills a small
+                   spec — right-hand dataset name + keys + how — which
+                   `tools.join_spec`/`tools.join_render` validate and render
+                   into merge code, same "structured spec, deterministic
+                   render" pattern as charts). `transform`/`join` never
+                   commit anything: on a successful verify they run
+                   `_node_finalize_transform`, which diffs the actual
+                   before/after schema (`tools.diff.compute_diff` — never the
+                   LLM's own account of what it changed, that's unreliable)
+                   and uploads the result parquet to a `pending/` S3 key, and
+                   `ask()` returns that diff + key for the API layer to turn
+                   into a `PendingTransform` row. `_should_retry` is
+                   three-way (`retry`/`finalize`/`respond`) specifically so a
+                   transform/join only reaches finalize after passing the
+                   same verify gate as every other route. `join` additionally
+                   resolves the right-hand dataset by fuzzy name match
+                   (`schema_context.find_dataset_by_name`) before validating,
+                   and downloads it as a second sandbox-mounted file
+                   alongside the left dataset — `_node_execute` mounts
+                   `right_local_path` under `right_dataset_name` whenever
+                   both are present.
 packages/sandbox/  isolated code-execution engine. `executor.py` runs
                    arbitrary Python in an ephemeral, hardened Docker
                    container (no network, read-only root FS, memory/CPU/pids
@@ -85,6 +116,26 @@ packages/tools/    pure, deterministic data operations only, no LLM calls:
                    NameError at execution time, not a caught error), join/
                    versioning tools (later phases). Agent may depend on
                    tools (one-directional); tools must never import agent.
+                   A ChartSpec's `date_part` (year/month/quarter,
+                   DATE_PART_CHART_TYPES = bar/pie/donut/line/area only)
+                   buckets a datetime x before grouping - added specifically
+                   because "count per year"-type questions were grouping by
+                   the exact raw date instead. Two related things to
+                   remember if you touch this code: (1) chart_render's
+                   bar/pie "Other" bucket ALWAYS casts the grouped x column
+                   to `str` before appending the literal string `"Other"` -
+                   without that, a datetime (or a date_part="year" int)
+                   column mixed with that one string value makes Plotly
+                   misdetect the axis type client-side, so the chart writes
+                   successfully (no Python error) but renders blank in the
+                   browser - this class of bug is real and already happened
+                   once, don't reintroduce it in a new render path. (2) the
+                   bar/pie cardinality warning in chart_spec.py is
+                   suppressed when date_part is set, since it's computed
+                   from the *raw* column's distinct_count, not the
+                   post-bucketing count - bucketing usually resolves the
+                   cardinality problem the warning would otherwise
+                   (wrongly) describe.
 scripts/          one-off scripts (smoke tests, etc.), run from repo root
 ```
 
@@ -197,7 +248,58 @@ project (`[tool.uv] package = false`) that depends on every member so a single
   post-Phase-7 guardrails.
 - Destructive operations (column drop, in-place-feeling overwrite, a join
   that changes row count) require an explicit preview + confirmation step
-  once that flow exists — never auto-commit a transform.
+  (`PendingTransform` — see "Transforms, joins & versioning" below) — never
+  auto-commit a transform.
+
+## Transforms, joins & versioning (Phase 5)
+
+- Two-phase propose/confirm, never a direct write. `POST /chat/ask` routing
+  to `transform`/`join` only ever produces a `PendingTransform` row (status
+  `pending`) plus a parquet sitting under a `datasets/{id}/pending/{uuid}/`
+  S3 key — the active dataset and every existing `DatasetVersion` are
+  untouched at this point, and nothing else in the catalog can see the
+  pending data (it's not linked from any version yet). `POST
+  /transforms/{id}/confirm` is the only thing that turns it into a real,
+  immutable `DatasetVersion`: it re-profiles the already-produced parquet
+  (`tools.profiler.profile_dataframe` + `tools.pii.scan_column`, the same
+  path ingestion uses for version 1), copies it to its permanent
+  `datasets/{id}/v{n}/data.parquet` key, and repoints
+  `dataset.active_version_id`. `POST /transforms/{id}/reject` just deletes
+  the pending S3 object and marks the row `rejected` — nothing to undo
+  because nothing was ever committed. Both confirm and reject 409 if the
+  `PendingTransform` isn't still `pending` (can't resolve twice).
+- Undo, redo, and "view an older version" are all the same operation: `POST
+  /datasets/{id}/active-version` repoints `active_version_id` to any
+  existing version of that dataset. Nothing is deleted or recomputed to do
+  this — every version's parquet is already immutable and already exists —
+  which is what makes it cheap. `agent.graphs.qa.ask()` re-resolves the
+  active version from the catalog on every call (`get_active_dataset`
+  → `download_active_version`), so a repoint is immediately visible to the
+  next chat question with no separate cache/session state to invalidate.
+- The diff shown in a preview (and stored as `DatasetVersion.diff_summary`
+  once confirmed) is always computed from the real before/after schema —
+  `tools.diff.compute_diff(old_columns, new_columns, old_row_count,
+  new_row_count)` reads the actual columns back from the produced parquet
+  and the catalog's row count for the base version. Never ask the LLM to
+  self-report what it changed for this — it can miscount or misdescribe,
+  and the whole point of a preview is that it's trustworthy.
+- Export (`GET /datasets/{id}/export?format=csv|xlsx|parquet&version_id=...`)
+  works against any historical version, not just the active one —
+  `version_id` is optional and only defaults to `active_version_id` when
+  omitted. It downloads that version's already-immutable parquet directly
+  from S3 and converts in-memory; it never re-runs any transform code.
+- EDA (`tools.eda_render.build_eda_code`) is deliberately NOT
+  ydata-profiling: that package hard-pins `pandas<3.0`
+  (`ydata-profiling==4.14.0` → `pandas!=1.4.0,<3.0,>1.1`), which conflicts
+  with this project's `pandas==3.0.6` pin in `packages/sandbox/Dockerfile`
+  (confirmed via a real `docker build` failure, not assumed) — forking the
+  sandbox image onto a different pandas version for one feature risks
+  subtle behavioral differences everywhere else that already assumes
+  pandas 3.0.6 semantics (Q&A, charts, transforms). The custom report uses
+  only pandas + plotly (already in the sandbox image), and caps both
+  profiled and charted columns (`_MAX_PROFILE_COLUMNS` /
+  `_MAX_CHART_COLUMNS` in `eda_render.py`) so a wide dataset still produces
+  a report in bounded time/size.
 
 ## Q&A agent — known scope boundary (as of Phase 3)
 
@@ -209,7 +311,9 @@ alone makes the right column obvious, not because the agent actually
 remembers the previous turn - don't mistake that for working conversational
 memory. Real multi-turn context is Phase 6's job (session memory). Don't
 partially bolt on conversation history before then; do it properly, in one
-phase, with the memory design already scoped for it.
+phase, with the memory design already scoped for it. This applies equally to
+transform/join (Phase 5) — "confirm this" is handled via the explicit
+`PendingTransform` id, not by the agent recalling what it just proposed.
 
 ## Code style for this repo
 

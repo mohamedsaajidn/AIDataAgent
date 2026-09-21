@@ -18,11 +18,23 @@ _FILTER_OPS = {
     "lte": "<=",
 }
 
+# "month"/"quarter" collapse to a year-qualified period ("2023-01", "2023Q1"),
+# not the bare calendar month/quarter - across a multi-year dataset, "by
+# month" almost always means the time series, not a seasonality view that
+# combines every year's Januaries together. Values come out already sortable
+# as plain strings (lexicographic order == chronological order here).
+_DATE_PART_ACCESSORS = {
+    "year": "dt.year",
+    "month": "dt.to_period('M').astype(str)",
+    "quarter": "dt.to_period('Q').astype(str)",
+}
+
 
 def build_chart_code(spec: dict, dataset_name: str) -> str:
     chart_type = spec["chart_type"]
     x, y, agg = spec.get("x"), spec.get("y"), spec.get("agg")
     filters = spec.get("filters") or []
+    date_part = spec.get("date_part")
     title = spec.get("title") or default_title(spec)
 
     lines = [
@@ -33,6 +45,12 @@ def build_chart_code(spec: dict, dataset_name: str) -> str:
     ]
     for f in filters:
         lines.append(_render_filter(f))
+
+    if date_part and x:
+        # pd.to_datetime() is a defensive no-op when x is already a proper
+        # datetime column (the normal case, post-ingestion) - cheap
+        # insurance against a dataset predating that coercion.
+        lines.append(f"df[{x!r}] = pd.to_datetime(df[{x!r}]).{_DATE_PART_ACCESSORS[date_part]}")
 
     if chart_type == "histogram":
         lines.append(f"fig = px.histogram(df, x={x!r}, title={title!r})")
@@ -80,6 +98,13 @@ def _render_bar(x: str, y: str | None, agg: str | None, title: str) -> list[str]
         group_line,
         "grouped = grouped.sort_values('value', ascending=False)",
         f"if len(grouped) > {BAR_TOP_N}:",
+        # Cast to string before adding the "Other" row: x may be a datetime
+        # (or other non-string) column, and mixing real timestamps with the
+        # literal string "Other" in one column makes Plotly misdetect the
+        # axis type in the browser - the chart still "succeeds" (no Python
+        # error, a valid chart.html gets written) but renders blank, since
+        # this happens client-side in the browser's JS, not in this process.
+        f"    grouped[{x!r}] = grouped[{x!r}].astype(str)",
         f"    top = grouped.iloc[:{BAR_TOP_N}].copy()",
         f"    other_total = grouped.iloc[{BAR_TOP_N}:]['value'].sum()",
         f"    other_row = pd.DataFrame([{{{x!r}: 'Other', 'value': other_total}}])",
@@ -99,6 +124,8 @@ def _render_pie(chart_type: str, x: str, y: str | None, agg: str | None, title: 
         group_line,
         "grouped = grouped.sort_values('value', ascending=False)",
         f"if len(grouped) > {PIE_TOP_N}:",
+        # See _render_bar for why this cast happens before adding "Other".
+        f"    grouped[{x!r}] = grouped[{x!r}].astype(str)",
         f"    top = grouped.iloc[:{PIE_TOP_N}].copy()",
         f"    other_total = grouped.iloc[{PIE_TOP_N}:]['value'].sum()",
         f"    other_row = pd.DataFrame([{{{x!r}: 'Other', 'value': other_total}}])",
@@ -145,12 +172,14 @@ def _render_violin(x: str | None, y: str, title: str) -> list[str]:
 
 def default_title(spec: dict) -> str:
     chart_type, x, y = spec["chart_type"], spec.get("x"), spec.get("y")
+    date_part = spec.get("date_part")
+    x_label = f"{x} ({date_part})" if date_part else x
     if chart_type == "histogram":
         return f"Distribution of {x}"
     if chart_type in ("bar", "pie", "donut"):
-        return f"{y or 'Count'} by {x}"
+        return f"{y or 'Count'} by {x_label}"
     if chart_type in ("line", "area"):
-        return f"{y} over {x}"
+        return f"{y} over {x_label}"
     if chart_type == "scatter":
         return f"{y} vs {x}"
     return f"Distribution of {y}" + (f" by {x}" if x else "")
