@@ -71,6 +71,28 @@ def list_other_datasets_brief(exclude_dataset_id: str, limit: int = 20) -> str:
         return "\n".join(lines) if lines else "(no other datasets available)"
 
 
+def describe_datasets_brief(dataset_ids: list[str]) -> str:
+    """Compact 'id/name: columns' listing for exactly the given datasets -
+    used to let the agent pick which attached dataset a question targets
+    when a session has more than one, without paying for each one's full
+    profile detail (that only gets loaded for the one actually resolved).
+    """
+    with get_session() as session:
+        datasets = session.scalars(
+            select(Dataset)
+            .where(Dataset.id.in_(dataset_ids))
+            .options(selectinload(Dataset.versions).selectinload(DatasetVersion.columns))
+        ).all()
+        lines = []
+        for dataset in datasets:
+            version = next((v for v in dataset.versions if v.id == dataset.active_version_id), None)
+            if not version:
+                continue
+            columns = ", ".join(sorted(c.name for c in version.columns))
+            lines.append(f"- id={dataset.id}, name={dataset.name}: {columns}")
+        return "\n".join(lines) if lines else "(no datasets attached)"
+
+
 def find_dataset_by_name(name_hint: str, exclude_dataset_id: str) -> Dataset | None:
     """Case-insensitive match against dataset names - the join spec prompt
     asks the LLM to copy a name verbatim from list_other_datasets_brief, but

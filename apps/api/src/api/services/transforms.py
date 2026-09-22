@@ -55,6 +55,7 @@ def _version_summary(v: DatasetVersion) -> dict:
         "source": v.source,
         "parent_version_id": str(v.parent_version_id) if v.parent_version_id else None,
         "diff_summary": v.diff_summary,
+        "generated_code": v.generated_code,
         "created_at": v.created_at.isoformat() if v.created_at else None,
     }
 

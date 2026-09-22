@@ -71,7 +71,10 @@ if chart_cols:
             c = 1
             r += 1
     fig.update_layout(height=300 * n_rows_grid, showlegend=False, title_text="Column Distributions")
-    charts_html = fig.to_html(include_plotlyjs="cdn", full_html=False)
+    # include_plotlyjs=True (not "cdn"): see chart_render.py for why - this
+    # sandbox's plotly package resolves "cdn" to a real but incompatible old
+    # plotly.js build, producing a blank chart with no visible error.
+    charts_html = fig.to_html(include_plotlyjs=True, full_html=False)
 
 html = f\"\"\"<!doctype html>
 <html><head><meta charset="utf-8"><style>

@@ -23,6 +23,13 @@ class Dataset(Base):
         ForeignKey("dataset_versions.id", use_alter=True, name="fk_dataset_active_version"),
         nullable=True,
     )
+    # Nullable: rows uploaded before this existed have no owner and are
+    # treated as unlisted (not shown in anyone's default dataset list, but
+    # still directly accessible by id - see "Dataset visibility" in
+    # CLAUDE.md for what this does and doesn't enforce).
+    uploaded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     versions: Mapped[list["DatasetVersion"]] = relationship(
@@ -83,16 +90,56 @@ class Column(Base):
     dataset_version: Mapped["DatasetVersion"] = relationship(back_populates="columns")
 
 
+class User(Base):
+    """No auth in this POC - `external_id` is just whatever stable identifier
+    the caller supplies (an email, a frontend-generated id, etc.), resolved
+    or auto-created on first use. This is an identity anchor, not a login
+    system - it exists so long-term memory has something stable to key on
+    across sessions.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    external_id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    display_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    dataset_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("datasets.id"), nullable=False)
+    # Nullable so pre-Phase-6 sessions (created before users existed) stay
+    # valid - every session created from here on always sets it.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     messages: Mapped[list["ChatMessage"]] = relationship(
         back_populates="session", cascade="all, delete-orphan", order_by="ChatMessage.created_at"
     )
+    dataset_links: Mapped[list["ChatSessionDataset"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan", order_by="ChatSessionDataset.added_at"
+    )
+
+
+class ChatSessionDataset(Base):
+    """A session can have several datasets attached (upload two files into one
+    conversation, or attach another mid-chat) - this many-to-many table is
+    what makes that possible instead of a session being pinned to one dataset
+    forever. `added_at` lets the UI show upload order / "most recently added".
+    """
+
+    __tablename__ = "chat_session_datasets"
+
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chat_sessions.id"), primary_key=True
+    )
+    dataset_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("datasets.id"), primary_key=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    session: Mapped["ChatSession"] = relationship(back_populates="dataset_links")
+    dataset: Mapped["Dataset"] = relationship()
 
 
 class ChatMessage(Base):

@@ -1,6 +1,7 @@
 from functools import lru_cache
 
 import boto3
+import chromadb
 import redis
 from sqlalchemy import Engine, create_engine
 
@@ -27,3 +28,9 @@ def get_s3_client():
 @lru_cache
 def get_redis_client() -> redis.Redis:
     return redis.from_url(get_settings().redis_url)
+
+
+@lru_cache
+def get_chroma_client() -> chromadb.ClientAPI:
+    settings = get_settings()
+    return chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)

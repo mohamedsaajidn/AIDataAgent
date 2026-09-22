@@ -8,6 +8,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "boto3>=1.35",
     "redis>=5.0",
+    "chromadb>=1.5.9",
 ]
 
 [build-system]
