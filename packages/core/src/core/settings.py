@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     chroma_host: str = "localhost"
     chroma_port: int = 8001
 
+    # Which provider agent.llm.get_chat_model() routes to - "openrouter" or
+    # "gemini". Swapping this (plus the matching *_MODEL) is the one-line env
+    # change described in CLAUDE.md's "LLM provider" section.
+    llm_provider: str = "openrouter"
+
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "deepseek/deepseek-v4-flash-0731:free"
@@ -30,6 +35,10 @@ class Settings(BaseSettings):
     # single small column can legitimately take 20-30s, so this needs to be
     # generous enough to not misfire on normal (if slow) responses.
     openrouter_timeout_seconds: int = 45
+
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.6-flash"
+    gemini_timeout_seconds: int = 45
 
     @property
     def postgres_dsn(self) -> str:

@@ -236,18 +236,33 @@ project (`[tool.uv] package = false`) that depends on every member so a single
 - `.env` is gitignored and never committed. `.env.example` is the template —
   update it whenever a new setting is added to `core.settings.Settings`.
 
-## LLM provider — OpenRouter via LangGraph, not the Claude Agent SDK
+## LLM provider — OpenRouter or Gemini via LangGraph, not the Claude Agent SDK
 
-- All model calls go through `agent.llm.get_chat_model()`, which wraps
-  `langchain_openai.ChatOpenAI` pointed at OpenRouter
-  (`OPENROUTER_BASE_URL`/`OPENROUTER_MODEL`/`OPENROUTER_API_KEY` in `.env`).
-  Never instantiate a chat model directly elsewhere — swapping models must
-  stay a one-line env change.
+- All model calls go through `agent.llm.get_chat_model()` — the only place a
+  chat model is instantiated anywhere in this project. It branches on
+  `LLM_PROVIDER` (`.env`, default `openrouter`):
+  - `openrouter`: wraps `langchain_openai.ChatOpenAI` pointed at OpenRouter
+    (`OPENROUTER_BASE_URL`/`OPENROUTER_MODEL`/`OPENROUTER_API_KEY`).
+  - `gemini`: wraps `langchain_google_genai.ChatGoogleGenerativeAI` calling
+    Google AI Studio directly (`GEMINI_MODEL`/`GEMINI_API_KEY`) — added so
+    development can use AI Studio's free tier instead of paying OpenRouter
+    for a Gemini model it already proxies. This is a deliberate second
+    provider, not a replacement for OpenRouter — keep both paths working.
+  - Any other `LLM_PROVIDER` value raises `ValueError` at call time rather
+    than silently falling back to a provider — fail fast on a typo instead
+    of quietly billing/calling the wrong service.
+  - Swapping providers (or swapping models within one provider) is always a
+    one-line env change. Never instantiate a chat model directly anywhere
+    else, and never branch on `LLM_PROVIDER` outside `llm.py` — any new
+    provider-specific logic belongs inside `get_chat_model()`, not at a
+    call site.
 - Do not introduce the Claude Agent SDK or the Anthropic SDK into this
-  project — it does not support routing to arbitrary OpenRouter models and
-  is not the chosen harness here. Agent orchestration is LangGraph only.
-- API keys are read from `.env` via `core.settings`, never hardcoded, never
-  logged, never included in a prompt or committed to a file.
+  project — it does not support routing to arbitrary OpenRouter/Gemini
+  models and is not the chosen harness here. Agent orchestration is
+  LangGraph only.
+- API keys (`OPENROUTER_API_KEY`, `GEMINI_API_KEY`) are read from `.env` via
+  `core.settings`, never hardcoded, never logged, never included in a prompt
+  or committed to a file.
 
 ## Sandbox execution boundary (non-negotiable)
 

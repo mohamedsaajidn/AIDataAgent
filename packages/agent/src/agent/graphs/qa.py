@@ -13,7 +13,7 @@ from langgraph.graph import END, StateGraph
 
 from agent import memory
 from agent.dataset_files import download_active_version
-from agent.llm import get_chat_model
+from agent.llm import get_chat_model, get_response_text
 from agent.schema_context import (
     build_schema_context,
     describe_datasets_brief,
@@ -193,6 +193,13 @@ Rules:
   number, string, list, or dict - not a matplotlib figure.
 - Only compute the specific aggregated/filtered answer to the question - do
   not return raw row-level data.
+- If a column named in the question already appears in the dataset schema
+  above, read it directly (e.g. `df["ThatColumn"]`) - do not recompute,
+  redefine, or reconstruct it from scratch using logic remembered from
+  earlier conversation. The schema reflects the dataset's actual current
+  values; recreated logic can silently drift from what was really persisted
+  (e.g. a different default/fallback value) and produce an answer that
+  contradicts the real data.
 - Do not touch the network, files outside the sandbox, or subprocesses.
 - Respond with ONLY a single ```python fenced code block, no other text.
 {retry_context}
@@ -345,6 +352,13 @@ Provide a corrected spec.
 
 _COUNT_KEYWORDS = ("how many", "count", "number of")
 _NUMERIC_KEYWORDS = ("average", "mean", "sum", "total", "median")
+# Word-boundary, not substring - a plain `"count" in question` also matches
+# inside "counts"/"discount"/etc, and the question text can include pasted
+# prior-answer context (e.g. "...to get the value counts. <the real ask>"),
+# which made this misfire on questions that never actually asked for a count.
+_NUMERIC_KEYWORD_PATTERN = re.compile(
+    r"\b(?:" + "|".join(re.escape(kw) for kw in _COUNT_KEYWORDS + _NUMERIC_KEYWORDS) + r")\b"
+)
 
 _ROUTES = ("sql", "pandas", "chart", "eda", "transform", "join", "clarify")
 
@@ -389,7 +403,7 @@ def _node_resolve_target_dataset(state: QAState) -> QAState:
     _track_usage(state, response)
 
     try:
-        parsed = _extract_json(response.content)
+        parsed = _extract_json(get_response_text(response))
     except (ValueError, json.JSONDecodeError):
         parsed = {}
 
@@ -438,7 +452,7 @@ def _node_extract_memory(state: QAState) -> QAState:
     _track_usage(state, response)
 
     try:
-        parsed = _extract_json(response.content)
+        parsed = _extract_json(get_response_text(response))
     except (ValueError, json.JSONDecodeError):
         parsed = {}
 
@@ -468,7 +482,7 @@ def _node_plan(state: QAState) -> QAState:
     _track_usage(state, response)
 
     try:
-        parsed = _extract_json(response.content)
+        parsed = _extract_json(get_response_text(response))
         route = parsed.get("route")
         if route not in _ROUTES:
             route = "pandas"
@@ -496,7 +510,7 @@ def _node_generate_code(state: QAState) -> QAState:
     )
     response = model.invoke(prompt)
     _track_usage(state, response)
-    state["code"] = _extract_code(response.content)
+    state["code"] = _extract_code(get_response_text(response))
     state["attempt"] = state.get("attempt", 0) + 1
     return state
 
@@ -519,7 +533,7 @@ def _node_generate_chart_spec(state: QAState) -> QAState:
     _track_usage(state, response)
 
     try:
-        spec = _extract_json(response.content)
+        spec = _extract_json(get_response_text(response))
     except (ValueError, json.JSONDecodeError):
         spec = {"chart_type": None}
 
@@ -561,7 +575,7 @@ def _node_generate_freehand_chart(state: QAState) -> QAState:
     )
     response = model.invoke(prompt)
     _track_usage(state, response)
-    state["code"] = _extract_code(response.content)
+    state["code"] = _extract_code(get_response_text(response))
     state["attempt"] = state.get("attempt", 0) + 1
     return state
 
@@ -593,7 +607,7 @@ def _node_generate_transform(state: QAState) -> QAState:
     )
     response = model.invoke(prompt)
     _track_usage(state, response)
-    state["code"] = _extract_code(response.content)
+    state["code"] = _extract_code(get_response_text(response))
     state["attempt"] = state.get("attempt", 0) + 1
     return state
 
@@ -618,7 +632,7 @@ def _node_generate_join_spec(state: QAState) -> QAState:
     _track_usage(state, response)
 
     try:
-        spec = _extract_json(response.content)
+        spec = _extract_json(get_response_text(response))
     except (ValueError, json.JSONDecodeError):
         spec = {}
 
@@ -735,7 +749,13 @@ def _node_verify(state: QAState) -> QAState:
         state["verification_error"] = "The code ran but did not set a `result` variable."
         return state
 
-    wants_number = any(kw in question for kw in _COUNT_KEYWORDS + _NUMERIC_KEYWORDS)
+    # An empty list/dict is a legitimate "nothing matched" answer regardless
+    # of question phrasing - retrying reruns the same code against the same
+    # data and gets the same empty result every time, so rejecting it here
+    # just burns retries (and MAX_ATTEMPTS) without ever being able to fix it.
+    is_empty_container = isinstance(result, (list, dict)) and len(result) == 0
+
+    wants_number = not is_empty_container and bool(_NUMERIC_KEYWORD_PATTERN.search(question))
     if wants_number and not _looks_numeric(result):
         state["verified"] = False
         state["verification_error"] = (

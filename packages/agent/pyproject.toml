@@ -10,6 +10,7 @@ dependencies = [
     "tools",
     "pyarrow>=25.0.1",
     "chromadb>=1.5.9",
+    "langchain-google-genai>=4.4.0",
 ]
 
 [tool.uv.sources]

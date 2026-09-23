@@ -103,7 +103,9 @@ def _ingest_sheet(
 
     profiles = profile_dataframe(df)
     for profile in profiles:
-        is_pii, entities = scan_column(profile["name"], profile["sample_values"])
+        is_pii, entities = scan_column(
+            profile["name"], profile["sample_values"], is_categorical=profile["inferred_type"] == "categorical"
+        )
         profile["is_pii"] = is_pii
         profile["pii_entities"] = entities
 

@@ -2,7 +2,7 @@ import json
 import re
 from concurrent.futures import ThreadPoolExecutor, wait
 
-from agent.llm import get_chat_model
+from agent.llm import get_chat_model, get_response_text
 
 _ALLOWED_TYPES = {"id", "categorical", "continuous", "datetime", "boolean", "text"}
 # A single prompt covering every column doesn't scale: a wide dataset (e.g. 200
@@ -73,7 +73,7 @@ def _review_batch(model, batch: list[dict]) -> dict[str, dict]:
         for p in batch
     ]
     response = model.invoke(_PROMPT.format(columns_json=json.dumps(payload)))
-    return _parse_response(response.content)
+    return _parse_response(get_response_text(response))
 
 
 def _parse_response(text: str) -> dict[str, dict]:
