@@ -2,25 +2,35 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from agent.schema_context import DatasetNotFound
-from api.services.chat import ask_question, get_session_history
+from api.services.chat import ask_question, get_session_history, list_sessions
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 class AskRequest(BaseModel):
-    dataset_id: str
+    # Datasets to attach to this session (in addition to whatever is already
+    # attached, if session_id is given). Required non-empty when starting a
+    # new session; can be empty when continuing one that already has
+    # datasets attached.
+    dataset_ids: list[str] = []
     question: str
+    user_id: str
     session_id: str | None = None
 
 
 @router.post("/ask")
 def ask(request: AskRequest) -> dict:
     try:
-        return ask_question(request.dataset_id, request.question, request.session_id)
+        return ask_question(request.dataset_ids, request.question, request.user_id, request.session_id)
     except DatasetNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/sessions")
+def get_sessions(user_id: str) -> dict:
+    return list_sessions(user_id)
 
 
 @router.get("/sessions/{session_id}")

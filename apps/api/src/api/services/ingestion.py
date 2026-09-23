@@ -5,6 +5,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from api.services.users import get_or_create_user
 from core.db import get_session
 from core.models import Column, Dataset, DatasetVersion
 from core.settings import get_settings
@@ -19,10 +20,16 @@ except Exception:  # pragma: no cover - LLM review is best-effort, never blocks 
     review_columns = None
 
 
-def ingest_file(filename: str, content: bytes) -> list[dict]:
+def ingest_file(filename: str, content: bytes, user_id: str) -> list[dict]:
+    user = get_or_create_user(user_id)
     content_hash = hashlib.sha256(content).hexdigest()
 
-    cached = _find_existing(content_hash)
+    # Dedup is per-(content, uploader): re-uploading the exact same file
+    # yourself reuses your existing dataset, but a different user uploading
+    # identical bytes gets their own copy - datasets are scoped per user
+    # (see "Dataset visibility" in CLAUDE.md), so reusing someone else's row
+    # here would silently hand them a dataset they don't own.
+    cached = _find_existing(content_hash, user.id)
     if cached:
         return cached
 
@@ -47,6 +54,7 @@ def ingest_file(filename: str, content: bytes) -> list[dict]:
             raw_key=raw_key,
             mime_type=_mime_type(filename),
             multi_sheet=multi_sheet,
+            uploaded_by_user_id=user.id,
         )
         for sheet_name, df in sheets.items()
     ]
@@ -54,11 +62,14 @@ def ingest_file(filename: str, content: bytes) -> list[dict]:
     return _load_summaries(created_ids)
 
 
-def _find_existing(content_hash: str) -> list[dict] | None:
+def _find_existing(content_hash: str, uploaded_by_user_id: uuid.UUID) -> list[dict] | None:
     with get_session() as session:
         existing = session.scalars(
             select(Dataset)
-            .where(Dataset.source_file_hash == content_hash)
+            .where(
+                Dataset.source_file_hash == content_hash,
+                Dataset.uploaded_by_user_id == uploaded_by_user_id,
+            )
             .options(selectinload(Dataset.versions).selectinload(DatasetVersion.columns))
         ).all()
         return [dataset_summary(d) for d in existing] if existing else None
@@ -85,13 +96,16 @@ def _ingest_sheet(
     raw_key: str,
     mime_type: str,
     multi_sheet: bool,
+    uploaded_by_user_id: uuid.UUID,
 ) -> uuid.UUID:
     df = df.copy()
     df.columns = _clean_column_names(list(df.columns))
 
     profiles = profile_dataframe(df)
     for profile in profiles:
-        is_pii, entities = scan_column(profile["name"], profile["sample_values"])
+        is_pii, entities = scan_column(
+            profile["name"], profile["sample_values"], is_categorical=profile["inferred_type"] == "categorical"
+        )
         profile["is_pii"] = is_pii
         profile["pii_entities"] = entities
 
@@ -128,6 +142,7 @@ def _ingest_sheet(
             original_filename=filename,
             mime_type=mime_type,
             source_file_hash=content_hash,
+            uploaded_by_user_id=uploaded_by_user_id,
         )
         session.add(dataset)
         session.flush()
@@ -206,6 +221,7 @@ def dataset_summary(dataset: Dataset) -> dict:
         "id": str(dataset.id),
         "name": dataset.name,
         "original_filename": dataset.original_filename,
+        "uploaded_by_user_id": str(dataset.uploaded_by_user_id) if dataset.uploaded_by_user_id else None,
         "created_at": dataset.created_at.isoformat() if dataset.created_at else None,
         "row_count": active_version.row_count if active_version else None,
         "column_count": active_version.column_count if active_version else None,

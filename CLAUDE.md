@@ -18,13 +18,32 @@ apps/api/        FastAPI backend (package name: api). `services/chat.py` +
                    versioned data (Phase 5) — kept as a separate service/route
                    pair from chat rather than folded in, since none of it goes
                    through the agent graph.
+apps/web/         React + Vite + TypeScript frontend - the only non-Python,
+                   non-uv part of this repo (own package.json, `npm install`/
+                   `npm run dev`/`npm run build` from apps/web, not uv). It is
+                   deliberately excluded from `[tool.uv.workspace]` in the
+                   root pyproject.toml (`exclude = ["apps/web"]"`) since it
+                   has no pyproject.toml and the workspace glob would
+                   otherwise error trying to match it. `vite.config.ts`
+                   proxies `/api/*` to `http://localhost:8000` in dev so the
+                   frontend never needs CORS config or a hardcoded backend
+                   origin - `src/api.ts` always calls relative `/api/...`
+                   paths. Talks only to the existing REST endpoints (chat,
+                   transforms, datasets) - no new backend surface was added
+                   for it, and it has no build step or dependency on
+                   anything under `packages/`.
 apps/worker/      async job runner (added later)
-packages/core/     Settings, DB/S3/Redis client factories, and the catalog
-                   ORM models (Dataset/DatasetVersion/Column/ChatSession/
-                   ChatMessage/PendingTransform) — the ONLY place connection
-                   details are read from
+packages/core/     Settings, DB/S3/Redis/Chroma client factories, and the
+                   catalog ORM models (Dataset/DatasetVersion/Column/User/
+                   ChatSession/ChatMessage/PendingTransform) — the ONLY place
+                   connection details are read from
 packages/agent/    LangGraph graphs, the OpenRouter LLM wrapper, and any
-                   other LLM-calling logic. `schema_context.py` renders
+                   other LLM-calling logic. `memory.py` is Phase 6's
+                   short-term (Redis)/long-term (Chroma) memory — see
+                   "Memory & personalization" below, this is its own section
+                   because it's cross-cutting (every route's prompt now
+                   includes a memory_context block) rather than one more
+                   route like Phase 5's. `schema_context.py` renders
                    catalog metadata (names/types/descriptions/distinct
                    counts/bounded sample values) into prompt text — this is
                    the ONLY dataset-derived content that ever reaches an LLM
@@ -135,7 +154,26 @@ packages/tools/    pure, deterministic data operations only, no LLM calls:
                    from the *raw* column's distinct_count, not the
                    post-bucketing count - bucketing usually resolves the
                    cardinality problem the warning would otherwise
-                   (wrongly) describe.
+                   (wrongly) describe. (3) every `fig.write_html`/`to_html`
+                   call - in chart_render.py, eda_render.py, and the
+                   freehand chart prompt in qa.py - MUST use
+                   `include_plotlyjs=True`, never `"cdn"`. This isn't a size
+                   preference: the sandbox's installed `plotly` Python
+                   package has a broken internal version constant
+                   (`plotly.offline.get_plotlyjs_version()` hardcodes
+                   `"4.1.1"`) that `"cdn"` mode trusts to build the CDN URL,
+                   which fetches a real but genuinely old plotly.js v4.1.1
+                   from cdn.plot.ly that can't parse the compact
+                   `bdata`/`dtype` typed-array encoding this plotly version's
+                   JSON output uses - the chart writes with no Python error
+                   and renders completely blank in the browser. Confirmed via
+                   direct inspection: the plotly.min.js actually bundled with
+                   the installed package (used by `True`/inline mode) DOES
+                   handle `bdata`, despite its own header comment also
+                   claiming "v4.1.1" - only the CDN-fetched copy is really
+                   stale. If `packages/sandbox/Dockerfile`'s plotly version
+                   ever changes, re-verify this before assuming "cdn" is
+                   safe again - don't just trust the version string.
 scripts/          one-off scripts (smoke tests, etc.), run from repo root
 ```
 
@@ -198,18 +236,33 @@ project (`[tool.uv] package = false`) that depends on every member so a single
 - `.env` is gitignored and never committed. `.env.example` is the template —
   update it whenever a new setting is added to `core.settings.Settings`.
 
-## LLM provider — OpenRouter via LangGraph, not the Claude Agent SDK
+## LLM provider — OpenRouter or Gemini via LangGraph, not the Claude Agent SDK
 
-- All model calls go through `agent.llm.get_chat_model()`, which wraps
-  `langchain_openai.ChatOpenAI` pointed at OpenRouter
-  (`OPENROUTER_BASE_URL`/`OPENROUTER_MODEL`/`OPENROUTER_API_KEY` in `.env`).
-  Never instantiate a chat model directly elsewhere — swapping models must
-  stay a one-line env change.
+- All model calls go through `agent.llm.get_chat_model()` — the only place a
+  chat model is instantiated anywhere in this project. It branches on
+  `LLM_PROVIDER` (`.env`, default `openrouter`):
+  - `openrouter`: wraps `langchain_openai.ChatOpenAI` pointed at OpenRouter
+    (`OPENROUTER_BASE_URL`/`OPENROUTER_MODEL`/`OPENROUTER_API_KEY`).
+  - `gemini`: wraps `langchain_google_genai.ChatGoogleGenerativeAI` calling
+    Google AI Studio directly (`GEMINI_MODEL`/`GEMINI_API_KEY`) — added so
+    development can use AI Studio's free tier instead of paying OpenRouter
+    for a Gemini model it already proxies. This is a deliberate second
+    provider, not a replacement for OpenRouter — keep both paths working.
+  - Any other `LLM_PROVIDER` value raises `ValueError` at call time rather
+    than silently falling back to a provider — fail fast on a typo instead
+    of quietly billing/calling the wrong service.
+  - Swapping providers (or swapping models within one provider) is always a
+    one-line env change. Never instantiate a chat model directly anywhere
+    else, and never branch on `LLM_PROVIDER` outside `llm.py` — any new
+    provider-specific logic belongs inside `get_chat_model()`, not at a
+    call site.
 - Do not introduce the Claude Agent SDK or the Anthropic SDK into this
-  project — it does not support routing to arbitrary OpenRouter models and
-  is not the chosen harness here. Agent orchestration is LangGraph only.
-- API keys are read from `.env` via `core.settings`, never hardcoded, never
-  logged, never included in a prompt or committed to a file.
+  project — it does not support routing to arbitrary OpenRouter/Gemini
+  models and is not the chosen harness here. Agent orchestration is
+  LangGraph only.
+- API keys (`OPENROUTER_API_KEY`, `GEMINI_API_KEY`) are read from `.env` via
+  `core.settings`, never hardcoded, never logged, never included in a prompt
+  or committed to a file.
 
 ## Sandbox execution boundary (non-negotiable)
 
@@ -301,19 +354,148 @@ project (`[tool.uv] package = false`) that depends on every member so a single
   `_MAX_CHART_COLUMNS` in `eda_render.py`) so a wide dataset still produces
   a report in bounded time/size.
 
-## Q&A agent — known scope boundary (as of Phase 3)
+## Q&A agent — scope boundary superseded by Phase 6
 
-`chat_sessions`/`chat_messages` in Postgres persist history, but the agent
-itself is stateless per question - `agent.graphs.qa.ask()` takes only
-`dataset_id` and `question`, with no prior turns threaded into the prompt. A
-follow-up like "what about the median?" can appear to work because the schema
-alone makes the right column obvious, not because the agent actually
-remembers the previous turn - don't mistake that for working conversational
-memory. Real multi-turn context is Phase 6's job (session memory). Don't
-partially bolt on conversation history before then; do it properly, in one
-phase, with the memory design already scoped for it. This applies equally to
-transform/join (Phase 5) — "confirm this" is handled via the explicit
-`PendingTransform` id, not by the agent recalling what it just proposed.
+Phases 1-5 built this stateless: `agent.graphs.qa.ask()` took only
+`dataset_id` and `question`, no prior turns threaded into the prompt, and a
+follow-up like "what about the median?" only appeared to work because the
+schema alone made the right column obvious. Phase 6 replaced this - see
+"Memory & personalization" below - `ask()` now takes `user_id`/`session_id`
+and genuinely threads short- and long-term context into every prompt. This
+applies equally to transform/join (Phase 5) — "confirm this" is still
+handled via the explicit `PendingTransform` id, not by the agent recalling
+what it just proposed, since memory is about interpreting language, not a
+substitute for that already-explicit confirmation mechanism.
+
+## Memory & personalization (Phase 6)
+
+- No auth exists in this POC. `User` is a lightweight identity anchor, not a
+  login system: `apps.api.services.users.get_or_create_user(external_id)`
+  resolves-or-creates a row keyed on whatever stable string the caller
+  supplies as `user_id` in the `/chat/ask` request body (an email, a
+  frontend-generated id — anything stable). `ChatSession.user_id` is
+  nullable (pre-Phase-6 sessions have none) but every session created from
+  here on always sets it, and re-using a `session_id` that belongs to a
+  different resolved user is rejected (`ValueError` → 400).
+- Short-term memory is per-session, Redis-backed, and deliberately NOT the
+  same thing as `chat_messages` in Postgres. Postgres is the permanent
+  record regardless of what happens to Redis; Redis
+  (`agent.memory.append_turn`/`get_recent_turns`, key
+  `session:{id}:turns`, capped at the last 6 turns, 24h TTL) exists
+  specifically so a follow-up like "what about EMEA?" can be resolved
+  against the actual previous question instead of the agent guessing from
+  schema alone. Because it's Redis and not a Python-process dict, session
+  context survives an API server restart — verified directly
+  (mid-conversation restart, follow-up still resolved correctly, turns
+  still present in Redis) per the Phase 6 checklist. Losing Redis (a
+  flush, an expired TTL) degrades gracefully to the old stateless behavior
+  for that session — it never loses anything that isn't also in Postgres.
+- Long-term memory is corrections/preferences a user has stated about a
+  specific dataset ("region means the sales team's region, not the
+  customer's"), embedded and stored in Chroma
+  (`agent.memory.remember_fact`/`retrieve_facts`, collection
+  `user_memory`), retrieved by semantic similarity to the current question
+  AND filtered by `{user_id, dataset_id}` via Chroma's `where` — never by
+  similarity alone. This filtering is load-bearing, not a nice-to-have:
+  verified directly that a fact stored for one dataset does not leak into
+  a different dataset for the same user, and a fact stored by one user
+  does not leak to a different user on the same dataset. Embeddings use
+  Chroma's bundled default embedding function (ONNX MiniLM, downloaded
+  once to `~/.cache/chroma/onnx_models/` on first use, then fully local) —
+  deliberately not OpenRouter or a `sentence-transformers`+torch install:
+  OpenRouter's embedding support is inconsistent across models (this
+  project pins a specific free chat model, not an embedding one), and
+  torch is a multi-hundred-MB install this project has no other reason to
+  carry. If that first-use download ever fails on this network, that's the
+  same class of issue as the spaCy model download (see the proxy note
+  under Package management) — retry, don't disable cert verification.
+- The `remember(fact)` capability is genuinely agent-driven, not hardcoded
+  pattern matching: every turn runs through `_node_extract_memory` first
+  (`_MEMORY_EXTRACT_PROMPT`), which decides whether the message is
+  teaching/correcting something reusable versus just asking a normal
+  question, and only calls `memory.remember_fact` when it judges the
+  former. This costs one extra LLM call per turn (latency/token cost) — a
+  deliberate tradeoff for genuinely open-ended detection instead of
+  hardcoded trigger phrases like "remember that...". A message can be a
+  pure correction (routed straight to a `"memory_ack"` response, skipping
+  `plan`/`execute` entirely — there's no real question to answer) or a
+  correction bundled with a real question (the fact is still stored, but
+  the graph continues through the normal plan→execute→verify flow and the
+  acknowledgment is prefixed onto the real answer) — both were verified
+  live, not just implemented.
+- Every route's prompt (`_ROUTER_PROMPT`, `_CODE_PROMPT`,
+  `_CHART_SPEC_PROMPT`, `_FREEHAND_CHART_PROMPT`, `_TRANSFORM_PROMPT`,
+  `_JOIN_SPEC_PROMPT`) now has a `{memory_context}` slot
+  (`_build_memory_context`) combining retrieved long-term facts and recent
+  short-term turns. If you add a new prompt that generates code or a spec
+  against the dataset, give it this slot too — omitting it silently
+  reintroduces the "agent repeats past mistakes" problem Phase 6 exists to
+  fix.
+
+## Multi-dataset chat sessions
+
+A `ChatSession` is no longer pinned to one dataset — `chat_session_datasets`
+is a many-to-many join table (`ChatSession.dataset_links`), and `POST
+/chat/ask` takes `dataset_ids: list[str]`. Any id not already attached to
+the session gets attached (this is what lets a file be added mid-chat, not
+just at session start); starting a *new* session with an empty list is
+rejected (`ValueError` → 400) since a session has to have at least one
+dataset. Which ONE attached dataset a given question is actually about is
+resolved inside the agent graph, not the API layer:
+`_node_resolve_target_dataset` runs first (trivial passthrough when only one
+dataset is attached — no LLM call, zero overhead for the common case; an
+LLM call given `schema_context.describe_datasets_brief` when there's more
+than one). If it can't confidently pick one, it sets `route="clarify"` and
+short-circuits straight to `respond` rather than guessing — verified live
+("how many rows are there?" against a session with two attached datasets
+correctly asked which one, instead of silently answering for the wrong
+one). Only after a single dataset is resolved does `_node_load_dataset` run
+(schema, active-version download) — this used to be `ask()`'s preamble
+before the graph even started; it moved inside the graph because with
+multiple datasets attached, nothing about which dataset to load is known
+until resolution has run. `QAResult.resolved_dataset_id` is what the API
+layer uses to build `PendingTransform` rows against the right dataset — a
+transform/join always targets whichever dataset was resolved for that
+turn, never a fixed "primary" one. This doesn't change how `join` finds its
+*second* dataset (`find_dataset_by_name` still searches every dataset in
+the catalog, not just ones attached to the session) — that's a deliberate
+scope boundary, not an oversight; conflating "attached to this session" with
+"joinable" would make join's dataset lookup session-dependent for no clear
+benefit yet.
+
+## Dataset visibility
+
+`Dataset.uploaded_by_user_id` (nullable FK to `users.id`) scopes `GET
+/datasets` to the requesting user's own uploads - `_find_existing` (the
+content-hash dedup in `ingestion.py`) is keyed on `(content_hash,
+uploaded_by_user_id)`, not content alone, so two different users uploading
+byte-identical files each get their own `Dataset` row rather than silently
+sharing one they don't own. This is a **listing default, not an
+authorization system**: `GET /datasets/{id}` and everything downstream
+(chat, transforms, export) still work by id regardless of who uploaded it -
+real enforcement (can this user even open this dataset) is Phase 7 scope,
+not built yet. Don't read the current filtering as "access control" in a
+design doc or to a user - it only controls what shows up in the default
+list. A dataset with `uploaded_by_user_id IS NULL` (created before this
+column existed) is unlisted for everyone by design, not shown as
+"shared"/fallback-visible - if you ever need to backfill ownership for
+pre-existing rows again, do it explicitly (`UPDATE datasets SET
+uploaded_by_user_id = :uid WHERE uploaded_by_user_id IS NULL`), don't assume
+NULL should keep meaning "visible to all."
+
+## Frontend identity (apps/web)
+
+No login flow - `apps/web/src/auth.ts` (`getCurrentUserId()`) is the single
+place identity is read from, sourced from `VITE_USER_ID` in
+`apps/web/.env.local` (gitignored, per-developer; `.env.example` is the
+template, mirroring the backend's `.env`/`.env.example` pattern). `App.tsx`
+renders a hard "Access denied" screen instead of the app when it's unset -
+never fall back to a default/anonymous id, since the entire point is that
+each teammate pulling this repo sets their own before they can use it. Vite
+only re-reads `.env.local` on dev-server restart, not hot-reload - changing
+it requires restarting `npm run dev`. When real auth eventually replaces
+this, `getCurrentUserId()` is the only function that needs to change; no
+component should read `import.meta.env.VITE_USER_ID` directly.
 
 ## Code style for this repo
 

@@ -2,7 +2,7 @@ from typing import TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from agent.llm import get_chat_model
+from agent.llm import get_chat_model, get_response_text
 
 
 class EchoState(TypedDict):
@@ -13,7 +13,7 @@ class EchoState(TypedDict):
 def _respond(state: EchoState) -> EchoState:
     model = get_chat_model()
     response = model.invoke(state["question"])
-    return {"question": state["question"], "answer": response.content}
+    return {"question": state["question"], "answer": get_response_text(response)}
 
 
 def build_echo_graph():

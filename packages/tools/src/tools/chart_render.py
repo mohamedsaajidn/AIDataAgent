@@ -69,10 +69,18 @@ def build_chart_code(spec: dict, dataset_name: str) -> str:
     else:  # box
         lines.extend(_render_box(x, y, title))
 
-    # include_plotlyjs="cdn" keeps the file small (~tens of KB instead of the
-    # ~4.8MB of embedding the full plotly.js bundle in every single chart) -
-    # matters once these get stored per chat message, not just returned once.
-    lines.append('fig.write_html(f"{ARTIFACTS_DIR}/chart.html", include_plotlyjs="cdn")')
+    # include_plotlyjs="cdn" would be far smaller, but the sandbox's installed
+    # plotly package has a broken internal version constant
+    # (plotly.offline.get_plotlyjs_version() -> "4.1.1") that "cdn" mode
+    # trusts blindly to build the CDN URL - that pulls a real, genuinely old
+    # plotly.js v4.1.1 from cdn.plot.ly that can't parse the compact
+    # bdata/dtype typed-array encoding this plotly version's JSON output
+    # uses, producing a blank chart with no error anywhere (confirmed: the
+    # bundled plotly.min.js this package ships - used by True/inline mode -
+    # DOES contain bdata-handling code, despite its own stale header comment
+    # also claiming "v4.1.1"). Embedding inline is the only mode guaranteed
+    # to match whatever this installed plotly actually produces.
+    lines.append('fig.write_html(f"{ARTIFACTS_DIR}/chart.html", include_plotlyjs=True)')
     lines.append(
         "result = "
         f"{{'chart_type': {chart_type!r}, 'x': {x!r}, 'y': {y!r}, 'rows_plotted': int(len(df))}}"

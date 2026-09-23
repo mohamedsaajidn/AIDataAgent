@@ -11,10 +11,12 @@ from typing import Literal, TypedDict
 import pyarrow.parquet as pq
 from langgraph.graph import END, StateGraph
 
+from agent import memory
 from agent.dataset_files import download_active_version
-from agent.llm import get_chat_model
+from agent.llm import get_chat_model, get_response_text
 from agent.schema_context import (
     build_schema_context,
+    describe_datasets_brief,
     find_dataset_by_name,
     get_active_dataset,
     get_column_profiles,
@@ -36,6 +38,7 @@ EDA_TIMEOUT_SECONDS = 45
 
 
 class QAState(TypedDict, total=False):
+    dataset_ids: list[str]
     dataset_id: str
     dataset_name: str
     local_data_path: str
@@ -43,6 +46,11 @@ class QAState(TypedDict, total=False):
     schema_text: str
     base_columns: list[str]
     base_row_count: int
+    user_id: str
+    session_id: str
+    recent_turns_text: str
+    long_term_facts_text: str
+    remembered_fact: str | None
     route: str
     clarification: str | None
     code: str | None
@@ -82,12 +90,72 @@ class QAResult:
     diff: dict | None = None
     pending_parquet_key: str | None = None
     join_spec: dict | None = None
+    remembered_fact: str | None = None
+    resolved_dataset_id: str | None = None
 
+
+_RESOLVE_DATASET_PROMPT = """This chat session has multiple datasets attached. Decide which ONE the
+user's message is primarily about.
+
+Attached datasets:
+{datasets}
+
+User's message: {question}
+
+If the message clearly targets one dataset (by name, or by columns/topics it mentions), respond
+with that dataset's id, copied exactly from the list above. If it's genuinely ambiguous - could
+reasonably apply to more than one, or names something that matches none of them - ask for
+clarification instead of guessing.
+
+Respond with ONLY a JSON object: {{"dataset_id": "..." or null, "clarification_question": "..." or null}}
+Exactly one of the two should be non-null.
+"""
+
+_MEMORY_EXTRACT_PROMPT = """You detect whether a user's message is correcting or teaching the agent
+something about how to interpret this dataset, that should be remembered for future questions -
+not just answered once.
+
+Recent conversation in this session:
+{recent_turns}
+
+Dataset schema:
+{schema}
+
+User's message: {question}
+
+Examples of things to remember: correcting what an EXISTING column means ("region means store
+region, not country"), stating a business rule about EXISTING data ("active means status is not
+cancelled or refunded"), a standing preference ("always show amounts in thousands"), or any other
+clarification that would still be true and useful the next time someone asks a question about
+this dataset.
+
+Do NOT flag a message as something to remember if it's just a normal question, even if phrased as
+a mild correction of the agent's last answer ("no I meant the total, not the average") without
+teaching anything reusable about the dataset itself - that's answered normally, not memorized.
+
+Do NOT flag a message as something to remember if it's asking the agent to DO something to the
+data right now - add/drop/rename a column, filter or clean rows, join another dataset, make a
+chart, run a profile, etc. - even when it's phrased using "is"/"means" language that sounds like a
+definition (e.g. "add a column called seniority_flag that is senior if salary > 90000, else
+junior" is a transform request to execute, NOT a fact about what an existing column already
+means - "fact" is for describing data that already exists, never for specifying new data to
+create). When in doubt about whether something is an action to perform versus a fact to store,
+treat it as an action - actions still get a normal answer either way, but a missed action means
+the user's request silently never happens.
+
+Respond with ONLY a JSON object:
+{{"should_remember": true|false, "fact": "..." or null, "also_asks_question": true|false}}
+"fact" must be a short, self-contained sentence - a future prompt won't have this conversation's
+context, so name the column/concept explicitly rather than saying "it" or "that". "also_asks_question"
+is true if the message ALSO asks something that still needs a normal answer, not just the correction.
+"""
 
 _ROUTER_PROMPT = """You are routing a data request to the right approach.
 
 Dataset schema:
 {schema}
+
+{memory_context}
 
 Question: {question}
 
@@ -111,6 +179,8 @@ _CODE_PROMPT = """You write short Python data-analysis scripts that run in a san
 Dataset schema:
 {schema}
 
+{memory_context}
+
 The dataset is available as a pandas DataFrame: datasets["{dataset_name}"]
 pandas is available as `pd`. DuckDB is available via `import duckdb` if useful.
 
@@ -123,6 +193,13 @@ Rules:
   number, string, list, or dict - not a matplotlib figure.
 - Only compute the specific aggregated/filtered answer to the question - do
   not return raw row-level data.
+- If a column named in the question already appears in the dataset schema
+  above, read it directly (e.g. `df["ThatColumn"]`) - do not recompute,
+  redefine, or reconstruct it from scratch using logic remembered from
+  earlier conversation. The schema reflects the dataset's actual current
+  values; recreated logic can silently drift from what was really persisted
+  (e.g. a different default/fallback value) and produce an answer that
+  contradicts the real data.
 - Do not touch the network, files outside the sandbox, or subprocesses.
 - Respond with ONLY a single ```python fenced code block, no other text.
 {retry_context}
@@ -143,6 +220,8 @@ _CHART_SPEC_PROMPT = """You turn a chart request into a small structured spec - 
 
 Dataset schema:
 {schema}
+
+{memory_context}
 
 Question: {question}
 
@@ -181,6 +260,8 @@ directly this time.
 Dataset schema:
 {schema}
 
+{memory_context}
+
 The dataset is available as a pandas DataFrame: datasets["{dataset_name}"]
 pandas is available as `pd`. plotly.express / plotly.graph_objects are available for plotting.
 DuckDB is available via `import duckdb` - if you use it, pass the dataframe directly to
@@ -190,7 +271,8 @@ dataset's name.
 Question: {question}
 
 Rules:
-- Save the chart to f"{{ARTIFACTS_DIR}}/chart.html" using fig.write_html(path, include_plotlyjs="cdn")
+- Save the chart to f"{{ARTIFACTS_DIR}}/chart.html" using fig.write_html(path, include_plotlyjs=True)
+  (always True, never "cdn" - the sandbox's plotly package resolves "cdn" to an incompatible plotly.js build and the chart renders blank)
 - Assign a plain string to a variable named `result` that describes exactly what you plotted AND
   explicitly states any assumption you made about anything ambiguous in the request (e.g. which
   column you used for a value the question didn't specify, or how you interpreted something not
@@ -206,6 +288,8 @@ becomes permanent until the user explicitly confirms the preview you're about to
 
 Dataset schema:
 {schema}
+
+{memory_context}
 
 The dataset is available as a pandas DataFrame: datasets["{dataset_name}"]
 pandas is available as `pd`. DuckDB is available via `import duckdb` if useful.
@@ -241,6 +325,8 @@ write merge code yourself here.
 Current dataset schema:
 {schema}
 
+{memory_context}
+
 Other datasets available to join with:
 {other_datasets}
 
@@ -266,6 +352,13 @@ Provide a corrected spec.
 
 _COUNT_KEYWORDS = ("how many", "count", "number of")
 _NUMERIC_KEYWORDS = ("average", "mean", "sum", "total", "median")
+# Word-boundary, not substring - a plain `"count" in question` also matches
+# inside "counts"/"discount"/etc, and the question text can include pasted
+# prior-answer context (e.g. "...to get the value counts. <the real ask>"),
+# which made this misfire on questions that never actually asked for a count.
+_NUMERIC_KEYWORD_PATTERN = re.compile(
+    r"\b(?:" + "|".join(re.escape(kw) for kw in _COUNT_KEYWORDS + _NUMERIC_KEYWORDS) + r")\b"
+)
 
 _ROUTES = ("sql", "pandas", "chart", "eda", "transform", "join", "clarify")
 
@@ -288,14 +381,108 @@ def _track_usage(state: QAState, response) -> None:
     state["completion_tokens"] = state.get("completion_tokens", 0) + (usage.get("output_tokens") or 0)
 
 
-def _node_plan(state: QAState) -> QAState:
+def _build_memory_context(state: QAState) -> str:
+    parts = []
+    if state.get("long_term_facts_text"):
+        parts.append(f"Known corrections/preferences from this user for this dataset:\n{state['long_term_facts_text']}")
+    if state.get("recent_turns_text"):
+        parts.append(f"Recent conversation in this session:\n{state['recent_turns_text']}")
+    return "\n\n".join(parts) if parts else "(none yet)"
+
+
+def _node_resolve_target_dataset(state: QAState) -> QAState:
+    dataset_ids = state["dataset_ids"]
+    if len(dataset_ids) == 1:
+        state["dataset_id"] = dataset_ids[0]
+        return state
+
+    brief = describe_datasets_brief(dataset_ids)
     model = get_chat_model(temperature=0.0)
-    prompt = _ROUTER_PROMPT.format(schema=state["schema_text"], question=state["question"])
+    prompt = _RESOLVE_DATASET_PROMPT.format(datasets=brief, question=state["question"])
     response = model.invoke(prompt)
     _track_usage(state, response)
 
     try:
-        parsed = _extract_json(response.content)
+        parsed = _extract_json(get_response_text(response))
+    except (ValueError, json.JSONDecodeError):
+        parsed = {}
+
+    resolved_id = parsed.get("dataset_id")
+    if resolved_id not in dataset_ids:
+        state["route"] = "clarify"
+        state["clarification"] = (
+            parsed.get("clarification_question") or "Which of the attached datasets are you asking about?"
+        )
+        return state
+
+    state["dataset_id"] = resolved_id
+    return state
+
+
+def _node_load_dataset(state: QAState) -> QAState:
+    dataset_name, schema_text = build_schema_context(state["dataset_id"])
+    _, active_version = get_active_dataset(state["dataset_id"])
+    _, local_path = download_active_version(state["dataset_id"])
+
+    state["dataset_name"] = dataset_name
+    state["schema_text"] = schema_text
+    state["base_columns"] = [c.name for c in active_version.columns]
+    state["base_row_count"] = active_version.row_count
+    state["local_data_path"] = str(local_path)
+    return state
+
+
+def _node_load_memory(state: QAState) -> QAState:
+    turns = memory.get_recent_turns(state.get("session_id"))
+    state["recent_turns_text"] = memory.render_recent_turns(turns)
+
+    facts = memory.retrieve_facts(state["user_id"], state["dataset_id"], state["question"])
+    state["long_term_facts_text"] = memory.render_facts(facts)
+    return state
+
+
+def _node_extract_memory(state: QAState) -> QAState:
+    model = get_chat_model(temperature=0.0)
+    prompt = _MEMORY_EXTRACT_PROMPT.format(
+        recent_turns=state.get("recent_turns_text") or "(none)",
+        schema=state["schema_text"],
+        question=state["question"],
+    )
+    response = model.invoke(prompt)
+    _track_usage(state, response)
+
+    try:
+        parsed = _extract_json(get_response_text(response))
+    except (ValueError, json.JSONDecodeError):
+        parsed = {}
+
+    should_remember = bool(parsed.get("should_remember")) and bool(parsed.get("fact"))
+    state["remembered_fact"] = parsed.get("fact") if should_remember else None
+
+    if should_remember:
+        memory.remember_fact(state["user_id"], state["dataset_id"], parsed["fact"])
+        if not parsed.get("also_asks_question", True):
+            state["route"] = "memory_ack"
+
+    return state
+
+
+def _node_save_turn(state: QAState) -> QAState:
+    if state.get("session_id"):
+        memory.append_turn(state["session_id"], state["question"], state.get("answer") or "", state.get("route") or "")
+    return state
+
+
+def _node_plan(state: QAState) -> QAState:
+    model = get_chat_model(temperature=0.0)
+    prompt = _ROUTER_PROMPT.format(
+        schema=state["schema_text"], memory_context=_build_memory_context(state), question=state["question"]
+    )
+    response = model.invoke(prompt)
+    _track_usage(state, response)
+
+    try:
+        parsed = _extract_json(get_response_text(response))
         route = parsed.get("route")
         if route not in _ROUTES:
             route = "pandas"
@@ -315,6 +502,7 @@ def _node_generate_code(state: QAState) -> QAState:
     model = get_chat_model(temperature=0.0)
     prompt = _CODE_PROMPT.format(
         schema=state["schema_text"],
+        memory_context=_build_memory_context(state),
         dataset_name=state["dataset_name"],
         route=state["route"],
         question=state["question"],
@@ -322,7 +510,7 @@ def _node_generate_code(state: QAState) -> QAState:
     )
     response = model.invoke(prompt)
     _track_usage(state, response)
-    state["code"] = _extract_code(response.content)
+    state["code"] = _extract_code(get_response_text(response))
     state["attempt"] = state.get("attempt", 0) + 1
     return state
 
@@ -336,13 +524,16 @@ def _node_generate_chart_spec(state: QAState) -> QAState:
 
     model = get_chat_model(temperature=0.0)
     prompt = _CHART_SPEC_PROMPT.format(
-        schema=state["schema_text"], question=state["question"], retry_context=retry_context
+        schema=state["schema_text"],
+        memory_context=_build_memory_context(state),
+        question=state["question"],
+        retry_context=retry_context,
     )
     response = model.invoke(prompt)
     _track_usage(state, response)
 
     try:
-        spec = _extract_json(response.content)
+        spec = _extract_json(get_response_text(response))
     except (ValueError, json.JSONDecodeError):
         spec = {"chart_type": None}
 
@@ -377,13 +568,14 @@ def _node_generate_freehand_chart(state: QAState) -> QAState:
     model = get_chat_model(temperature=0.0)
     prompt = _FREEHAND_CHART_PROMPT.format(
         schema=state["schema_text"],
+        memory_context=_build_memory_context(state),
         dataset_name=state["dataset_name"],
         question=state["question"],
         retry_context=retry_context,
     )
     response = model.invoke(prompt)
     _track_usage(state, response)
-    state["code"] = _extract_code(response.content)
+    state["code"] = _extract_code(get_response_text(response))
     state["attempt"] = state.get("attempt", 0) + 1
     return state
 
@@ -408,13 +600,14 @@ def _node_generate_transform(state: QAState) -> QAState:
     model = get_chat_model(temperature=0.0)
     prompt = _TRANSFORM_PROMPT.format(
         schema=state["schema_text"],
+        memory_context=_build_memory_context(state),
         dataset_name=state["dataset_name"],
         question=state["question"],
         retry_context=retry_context,
     )
     response = model.invoke(prompt)
     _track_usage(state, response)
-    state["code"] = _extract_code(response.content)
+    state["code"] = _extract_code(get_response_text(response))
     state["attempt"] = state.get("attempt", 0) + 1
     return state
 
@@ -429,14 +622,17 @@ def _node_generate_join_spec(state: QAState) -> QAState:
     other_datasets = list_other_datasets_brief(state["dataset_id"])
     model = get_chat_model(temperature=0.0)
     prompt = _JOIN_SPEC_PROMPT.format(
-        schema=state["schema_text"], other_datasets=other_datasets, question=state["question"],
+        schema=state["schema_text"],
+        memory_context=_build_memory_context(state),
+        other_datasets=other_datasets,
+        question=state["question"],
         retry_context=retry_context,
     )
     response = model.invoke(prompt)
     _track_usage(state, response)
 
     try:
-        spec = _extract_json(response.content)
+        spec = _extract_json(get_response_text(response))
     except (ValueError, json.JSONDecodeError):
         spec = {}
 
@@ -553,7 +749,13 @@ def _node_verify(state: QAState) -> QAState:
         state["verification_error"] = "The code ran but did not set a `result` variable."
         return state
 
-    wants_number = any(kw in question for kw in _COUNT_KEYWORDS + _NUMERIC_KEYWORDS)
+    # An empty list/dict is a legitimate "nothing matched" answer regardless
+    # of question phrasing - retrying reruns the same code against the same
+    # data and gets the same empty result every time, so rejecting it here
+    # just burns retries (and MAX_ATTEMPTS) without ever being able to fix it.
+    is_empty_container = isinstance(result, (list, dict)) and len(result) == 0
+
+    wants_number = not is_empty_container and bool(_NUMERIC_KEYWORD_PATTERN.search(question))
     if wants_number and not _looks_numeric(result):
         state["verified"] = False
         state["verification_error"] = (
@@ -619,6 +821,20 @@ def _format_result(result: object) -> str:
 
 
 def _node_respond(state: QAState) -> QAState:
+    if state["route"] == "memory_ack":
+        state["answer"] = f"Got it — I'll remember that {state['remembered_fact'].rstrip('.')}."
+        return state
+
+    state = _node_respond_answer(state)
+
+    if state.get("remembered_fact"):
+        fact = state["remembered_fact"].rstrip(".")
+        state["answer"] = f"Got it — I'll remember that {fact}. {state['answer']}"
+
+    return state
+
+
+def _node_respond_answer(state: QAState) -> QAState:
     if state["route"] == "clarify":
         state["answer"] = state.get("clarification") or "Could you clarify what you mean?"
         return state
@@ -702,6 +918,11 @@ def _effective_route(planned_route: str, code: str | None, needs_freehand_chart:
 
 def build_qa_graph():
     graph = StateGraph(QAState)
+    graph.add_node("resolve_target_dataset", _node_resolve_target_dataset)
+    graph.add_node("load_dataset", _node_load_dataset)
+    graph.add_node("load_memory", _node_load_memory)
+    graph.add_node("extract_memory", _node_extract_memory)
+    graph.add_node("save_turn", _node_save_turn)
     graph.add_node("plan", _node_plan)
     graph.add_node("generate_code", _node_generate_code)
     graph.add_node("generate_chart_spec", _node_generate_chart_spec)
@@ -720,7 +941,15 @@ def build_qa_graph():
     graph.add_node("finalize_transform", _node_finalize_transform)
     graph.add_node("respond", _node_respond)
 
-    graph.set_entry_point("plan")
+    graph.set_entry_point("resolve_target_dataset")
+    graph.add_conditional_edges(
+        "resolve_target_dataset", lambda s: "respond" if s.get("route") == "clarify" else "load_dataset"
+    )
+    graph.add_edge("load_dataset", "load_memory")
+    graph.add_edge("load_memory", "extract_memory")
+    graph.add_conditional_edges(
+        "extract_memory", lambda s: "respond" if s.get("route") == "memory_ack" else "plan"
+    )
 
     def _route_from_plan(s: QAState) -> str:
         route = s["route"]
@@ -765,6 +994,7 @@ def build_qa_graph():
         "verify", _should_retry, {"retry": "prepare_retry", "finalize": "finalize_transform", "respond": "respond"}
     )
     graph.add_edge("finalize_transform", "respond")
+    graph.add_edge("respond", "save_turn")
     graph.add_conditional_edges(
         "prepare_retry",
         lambda s: "generate_freehand_chart"
@@ -776,42 +1006,39 @@ def build_qa_graph():
             else "generate_code"
         ),
     )
-    graph.add_edge("respond", END)
+    graph.add_edge("save_turn", END)
 
     return graph.compile()
 
 
-def ask(dataset_id: str, question: str) -> QAResult:
-    dataset_name, schema_text = build_schema_context(dataset_id)
-    _, active_version = get_active_dataset(dataset_id)
-    base_columns = [c.name for c in active_version.columns]
-    base_row_count = active_version.row_count
-    _, local_path = download_active_version(dataset_id)
+def ask(dataset_ids: list[str], question: str, user_id: str, session_id: str) -> QAResult:
+    """`dataset_ids` are every dataset attached to this chat session - which
+    ONE a given question is actually about is resolved inside the graph
+    (`_node_resolve_target_dataset`), not here, since that resolution needs
+    an LLM call when there's more than one and this function shouldn't
+    duplicate that decision.
+    """
+    graph = build_qa_graph()
+    start = time.monotonic()
+    final_state: QAState = graph.invoke(
+        {
+            "dataset_ids": dataset_ids,
+            "question": question,
+            "user_id": user_id,
+            "session_id": session_id,
+            "attempt": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+        }
+    )
+    duration = time.monotonic() - start
 
-    right_local_path: str | None = None
-    try:
-        graph = build_qa_graph()
-        start = time.monotonic()
-        final_state: QAState = graph.invoke(
-            {
-                "dataset_id": dataset_id,
-                "dataset_name": dataset_name,
-                "local_data_path": str(local_path),
-                "question": question,
-                "schema_text": schema_text,
-                "base_columns": base_columns,
-                "base_row_count": base_row_count,
-                "attempt": 0,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-            }
-        )
-        duration = time.monotonic() - start
-        right_local_path = final_state.get("right_local_path")
-    finally:
-        shutil.rmtree(local_path.parent, ignore_errors=True)
-        if right_local_path:
-            shutil.rmtree(Path(right_local_path).parent, ignore_errors=True)
+    local_path = final_state.get("local_data_path")
+    right_local_path = final_state.get("right_local_path")
+    if local_path:
+        shutil.rmtree(Path(local_path).parent, ignore_errors=True)
+    if right_local_path:
+        shutil.rmtree(Path(right_local_path).parent, ignore_errors=True)
 
     exec_result = final_state.get("execution_result") or {}
     artifacts = final_state.get("artifacts") or {}
@@ -833,4 +1060,6 @@ def ask(dataset_id: str, question: str) -> QAResult:
         diff=final_state.get("diff"),
         pending_parquet_key=final_state.get("pending_parquet_key"),
         join_spec=final_state.get("join_spec"),
+        remembered_fact=final_state.get("remembered_fact"),
+        resolved_dataset_id=final_state.get("dataset_id"),
     )

@@ -29,6 +29,9 @@ api = { workspace = true }
 
 [tool.uv.workspace]
 members = ["apps/*", "packages/*"]
+# apps/web is a Node/Vite frontend, not a uv workspace member - it has no
+# pyproject.toml on purpose, so it must be excluded rather than matched.
+exclude = ["apps/web"]
 
 [dependency-groups]
 dev = [

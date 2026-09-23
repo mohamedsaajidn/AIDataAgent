@@ -39,18 +39,28 @@ def _get_analyzer() -> AnalyzerEngine:
     return AnalyzerEngine(nlp_engine=provider.create_engine(), supported_languages=["en"])
 
 
-def scan_column(column_name: str, sample_values: list) -> tuple[bool, list[str]]:
+def scan_column(column_name: str, sample_values: list, is_categorical: bool = False) -> tuple[bool, list[str]]:
     text = " | ".join(str(v) for v in sample_values if v is not None)
     if not text.strip():
         return False, []
 
     is_business_column = any(kw in column_name.lower() for kw in _BUSINESS_COLUMN_KEYWORDS)
+    # The keyword list above only catches the false-positive class when the
+    # *column name* hints at it. It doesn't when the name doesn't (observed:
+    # "DelphiFormatName" -> "Conditioner"/"Shampoo" values scored PERSON at
+    # 0.85, same as the "Conditioner" case the keyword list was built for,
+    # but "format" isn't a business keyword). A low-cardinality categorical
+    # column is a controlled vocabulary being repeated across rows, not free
+    # text about an individual, regardless of what its name happens to be -
+    # the caller passes the profiler's own inferred_type so this doesn't
+    # depend on guessing every possible naming convention up front.
+    suppress_ner = is_business_column or is_categorical
 
     entities: set[str] = set()
     for r in _get_analyzer().analyze(text=text, language="en"):
         if r.score < _SCORE_THRESHOLD or r.entity_type in _ALWAYS_EXCLUDED_ENTITIES:
             continue
-        if r.entity_type in _NER_ENTITIES and is_business_column:
+        if r.entity_type in _NER_ENTITIES and suppress_ner:
             continue
         entities.add(r.entity_type)
 
