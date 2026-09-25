@@ -4,14 +4,21 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from agent.graphs.qa import ask as ask_agent
+from agent.graphs.orchestrator import ask as ask_orchestrator
+from agent.graphs.qa import ask as ask_legacy_qa
 from agent.schema_context import get_active_dataset
 from api.services.users import get_or_create_user
 from core.db import get_session
 from core.models import ChatMessage, ChatSession, ChatSessionDataset, PendingTransform
 
 
-def ask_question(dataset_ids: list[str], question: str, user_id: str, session_id: str | None = None) -> dict:
+def ask_question(
+    dataset_ids: list[str],
+    question: str,
+    user_id: str,
+    session_id: str | None = None,
+    use_legacy_qa_graph: bool = False,
+) -> dict:
     if not session_id and not dataset_ids:
         raise ValueError("Starting a new session requires at least one dataset_id")
 
@@ -44,7 +51,8 @@ def ask_question(dataset_ids: list[str], question: str, user_id: str, session_id
         session_id_value = chat_session.id
         all_dataset_ids = list(existing_ids | set(dataset_ids))
 
-    result = ask_agent(all_dataset_ids, question, user_id=str(user.id), session_id=str(session_id_value))
+    agent_fn = ask_legacy_qa if use_legacy_qa_graph else ask_orchestrator
+    result = agent_fn(all_dataset_ids, question, user_id=str(user.id), session_id=str(session_id_value))
     latency_ms = int(result.duration_seconds * 1000)
 
     pending_transform_id = None

@@ -111,6 +111,21 @@ def find_dataset_by_name(name_hint: str, exclude_dataset_id: str) -> Dataset | N
         ).first()
 
 
+def render_column_descriptions(dataset_id: str) -> str:
+    """Per-column name/type/description listing for a user-facing answer -
+    distinct from build_schema_context's LLM-prompt rendering (which also
+    carries distinct counts/sample values a user doesn't need to see, and
+    withholds descriptions for nothing - descriptions are never PII-gated
+    since they're LLM-written summaries, not raw values).
+    """
+    _, version = get_active_dataset(dataset_id)
+    lines = []
+    for column in sorted(version.columns, key=lambda c: c.position):
+        desc = column.description or "(no description available)"
+        lines.append(f"- {column.name} ({column.inferred_type}): {desc}")
+    return "\n".join(lines)
+
+
 def get_column_profiles(dataset_id: str) -> dict[str, dict]:
     """Structured (not prompt-text) column metadata, for deterministic
     validation code (e.g. chart spec validation) rather than LLM prompts.

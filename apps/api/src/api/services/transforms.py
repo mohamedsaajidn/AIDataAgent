@@ -12,6 +12,11 @@ from core.storage import get_s3_client
 from tools.pii import scan_column
 from tools.profiler import coerce_types, profile_dataframe
 
+try:
+    from agent.schema_review import review_columns
+except Exception:  # pragma: no cover - LLM review is best-effort, never blocks confirm
+    review_columns = None
+
 
 class PendingTransformNotFound(Exception):
     pass
@@ -91,6 +96,11 @@ def confirm_transform(pending_id: str) -> dict:
         parquet_bytes = obj["Body"].read()
         s3.put_object(Bucket=settings.s3_bucket, Key=parquet_key, Body=parquet_bytes)
 
+        parent_columns = session.scalars(
+            select(Column).where(Column.dataset_version_id == pending.base_version_id)
+        ).all()
+        parent_descriptions = {c.name: c.description for c in parent_columns}
+
         df = pd.read_parquet(io.BytesIO(parquet_bytes))
         profiles = profile_dataframe(df)
         for profile in profiles:
@@ -99,7 +109,27 @@ def confirm_transform(pending_id: str) -> dict:
             )
             profile["is_pii"] = is_pii
             profile["pii_entities"] = entities
-            profile["description"] = None
+            # Carry forward the existing description for any column this
+            # transform didn't touch (matched by name) - unconditionally
+            # nulling every column's description here meant a single
+            # transform permanently lost the whole dataset's descriptions,
+            # not just the columns the transform actually changed.
+            profile["description"] = parent_descriptions.get(profile["name"])
+
+        # A column with no carried-forward description is either genuinely
+        # new (the transform added it) or renamed - either way it has no
+        # description yet, so give it one the same best-effort way ingestion
+        # does. Only the new/renamed columns, not the whole dataset again,
+        # to keep this cheap on every confirm.
+        new_columns = [p for p in profiles if p["description"] is None]
+        if new_columns and review_columns is not None:
+            try:
+                reviewed = review_columns(new_columns)
+            except Exception:
+                reviewed = {}
+            for profile in new_columns:
+                profile["description"] = reviewed.get(profile["name"], {}).get("description")
+
         coerce_types(df, profiles)
 
         version_id = uuid.uuid4()
