@@ -4,9 +4,12 @@ execution boundary. The untrusted half is whatever it reads from
 """
 
 import json
+import os
 import traceback
 from pathlib import Path
 
+import duckdb
+import numpy as np
 import pandas as pd
 
 DATA_DIR = Path("/data")
@@ -46,7 +49,28 @@ def _serialize(value: object) -> object:
 def main() -> None:
     ARTIFACTS_DIR.mkdir(exist_ok=True)
     datasets = _load_datasets()
-    namespace = {"datasets": datasets, "pd": pd, "ARTIFACTS_DIR": str(ARTIFACTS_DIR)}
+    # Generated code has repeatedly (observed live, multiple times) reached
+    # for os.getenv("ARTIFACTS_DIR") instead of the bare namespace variable
+    # below - that always returned None and either silently skipped saving
+    # the artifact or wrote it to a guessed fallback path the executor never
+    # looks at, with no Python error either way. Setting the real env var
+    # too means either style resolves correctly - this doesn't change how
+    # the namespace variable already works, it just makes the other common
+    # way of looking this up also correct instead of prompting around it.
+    os.environ["ARTIFACTS_DIR"] = str(ARTIFACTS_DIR)
+    # numpy is already a sandbox image dependency (scikit-learn/scipy/plotly
+    # all pull it in) but wasn't pre-imported like pandas - observed live: a
+    # regression/stats question wrote np.polyfit(...) without its own import
+    # and got a plain NameError, an easily-avoided wasted retry for one of
+    # the most common numeric-analysis imports, same rationale as pd below.
+    # duckdb is also a sandbox image dependency, same story as np below -
+    # observed live (GPT-4o-mini): 3/3 attempts wrote duckdb.query(...) with
+    # no import at all, despite the prompt saying "via `import duckdb`" -
+    # apparently read as "it's available, reference it as duckdb" by this
+    # model rather than "you must import it yourself". Pre-importing it
+    # removes the ambiguity instead of relying on prompt wording to survive
+    # different models' interpretations.
+    namespace = {"datasets": datasets, "pd": pd, "np": np, "duckdb": duckdb, "ARTIFACTS_DIR": str(ARTIFACTS_DIR)}
 
     error = None
     result_value = None

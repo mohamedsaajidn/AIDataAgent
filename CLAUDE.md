@@ -48,8 +48,16 @@ packages/agent/    LangGraph graphs, the OpenRouter LLM wrapper, and any
                    counts/bounded sample values) into prompt text — this is
                    the ONLY dataset-derived content that ever reaches an LLM
                    prompt; PII-flagged columns get a warning instead of
-                   sample values. `graphs/qa.py` is the read-only Q&A agent:
-                   plan (routes sql/pandas/clarify) → generate_code → execute
+                   sample values. `graphs/orchestrator.py` is the default
+                   Q&A entry point as of Phase 7 (tool-calling, not a fixed
+                   router) — see "Q&A agent architecture" below for why and
+                   how. `graphs/qa.py` is kept as both the documented
+                   fallback graph AND the library orchestrator.py's tools
+                   are built on (`run_route`) — its own internal routing is
+                   still exactly as described below, since that's what both
+                   graphs actually run underneath. `graphs/qa.py` is the
+                   read-only Q&A agent: plan (routes sql/pandas/clarify) →
+                   generate_code → execute
                    (calls sandbox.run_python) → verify (heuristic result-type
                    check) → respond, with a retry edge feeding the traceback
                    back into generate_code (bounded by MAX_ATTEMPTS).
@@ -236,18 +244,44 @@ project (`[tool.uv] package = false`) that depends on every member so a single
 - `.env` is gitignored and never committed. `.env.example` is the template —
   update it whenever a new setting is added to `core.settings.Settings`.
 
-## LLM provider — OpenRouter or Gemini via LangGraph, not the Claude Agent SDK
+## LLM provider — OpenRouter, Gemini, or Vertex AI via LangGraph, not the Claude Agent SDK
 
 - All model calls go through `agent.llm.get_chat_model()` — the only place a
   chat model is instantiated anywhere in this project. It branches on
   `LLM_PROVIDER` (`.env`, default `openrouter`):
   - `openrouter`: wraps `langchain_openai.ChatOpenAI` pointed at OpenRouter
-    (`OPENROUTER_BASE_URL`/`OPENROUTER_MODEL`/`OPENROUTER_API_KEY`).
-  - `gemini`: wraps `langchain_google_genai.ChatGoogleGenerativeAI` calling
-    Google AI Studio directly (`GEMINI_MODEL`/`GEMINI_API_KEY`) — added so
+    (`OPENROUTER_BASE_URL`/`OPENROUTER_MODEL`/`OPENROUTER_API_KEY`). Note:
+    OpenRouter's free models genuinely get retired/rate-limited over time
+    (observed live twice — one model returned 404 "no longer available",
+    another 429 "temporarily rate-limited upstream") — this is normal
+    operation of shared free infrastructure, not a bug, when it happens
+    check https://openrouter.ai/models?max_price=0 for a current one.
+  - `gemini`: wraps `langchain_google_genai.ChatGoogleGenerativeAI` with
+    `vertexai` unset, calling Google AI Studio directly
+    (`GEMINI_MODEL`/`GEMINI_API_KEY`, simple API-key auth) — added so
     development can use AI Studio's free tier instead of paying OpenRouter
-    for a Gemini model it already proxies. This is a deliberate second
-    provider, not a replacement for OpenRouter — keep both paths working.
+    for a Gemini model it already proxies.
+  - `vertex`: wraps the **same** `ChatGoogleGenerativeAI` class with
+    `vertexai=True` plus `VERTEX_PROJECT`/`VERTEX_LOCATION` -  Google's
+    unified `google-genai` SDK (which `langchain-google-genai` 4.0+ is
+    built on) speaks to both the AI Studio and Vertex AI backends through
+    one client, so this does NOT use the separate `langchain-google-vertexai`
+    package deliberately: that package's dependency chain caps
+    `pyarrow<24.0.0` across every published version, which conflicts
+    outright with this project's `pyarrow==25.0.1` pin (kept in sync with
+    the sandbox image - see that pin's own comment) - confirmed via a real
+    `uv add` resolution failure, not assumed. Vertex AI is a paid,
+    separately-billed GCP product from AI Studio even though it serves the
+    same model family, and its auth is different too - not a simple API
+    key by default. `get_chat_model()` supports three auth paths for it,
+    tried in this order: `VERTEX_API_KEY` (a Vertex-AI-enabled key, **not**
+    interchangeable with `GEMINI_API_KEY`) if set; else
+    `VERTEX_CREDENTIALS_PATH` (a downloaded service-account JSON key) if
+    set; else falls through to Application Default Credentials (`gcloud
+    auth application-default login`, or the environment's own service
+    identity when deployed). `VERTEX_PROJECT` must be the project ID
+    (the short string), never the numeric project number - the client
+    rejects the number.
   - Any other `LLM_PROVIDER` value raises `ValueError` at call time rather
     than silently falling back to a provider — fail fast on a typo instead
     of quietly billing/calling the wrong service.
@@ -257,12 +291,15 @@ project (`[tool.uv] package = false`) that depends on every member so a single
     provider-specific logic belongs inside `get_chat_model()`, not at a
     call site.
 - Do not introduce the Claude Agent SDK or the Anthropic SDK into this
-  project — it does not support routing to arbitrary OpenRouter/Gemini
-  models and is not the chosen harness here. Agent orchestration is
+  project — it does not support routing to arbitrary OpenRouter/Gemini/
+  Vertex models and is not the chosen harness here. Agent orchestration is
   LangGraph only.
-- API keys (`OPENROUTER_API_KEY`, `GEMINI_API_KEY`) are read from `.env` via
+- API keys/credentials (`OPENROUTER_API_KEY`, `GEMINI_API_KEY`,
+  `VERTEX_API_KEY`, `VERTEX_CREDENTIALS_PATH`) are read from `.env` via
   `core.settings`, never hardcoded, never logged, never included in a prompt
-  or committed to a file.
+  or committed to a file. A service-account JSON key file (when
+  `VERTEX_CREDENTIALS_PATH` is used) lives outside the repo entirely, same
+  rule as any other credential.
 
 ## Sandbox execution boundary (non-negotiable)
 
@@ -353,6 +390,77 @@ project (`[tool.uv] package = false`) that depends on every member so a single
   profiled and charted columns (`_MAX_PROFILE_COLUMNS` /
   `_MAX_CHART_COLUMNS` in `eda_render.py`) so a wide dataset still produces
   a report in bounded time/size.
+
+## Q&A agent architecture — orchestrator (Phase 7) is the default, qa.py is a kept fallback
+
+`agent.graphs.orchestrator.ask()` — not `agent.graphs.qa.ask()` — is what
+`apps/api/services/chat.py` calls by default. This replaced a fixed
+router+per-route-subgraph design (`agent.graphs.qa`: an LLM classifies every
+question into exactly one of `sql`/`pandas`/`chart`/`eda`/`transform`/`join`/
+`clarify`, each with its own dedicated graph nodes) because that shape has
+no slot for anything that isn't a fresh data request - a follow-up asking
+to interpret a prior result ("what does reject H0 mean"), a short "yes"
+confirming something the agent itself just offered, or plain conversation
+(greetings, thanks) all got force-fit into `clarify`, which caused a real,
+reproduced-live bug: a conversation stuck re-asking a near-identical
+clarifying question 3 times in a row even after the user answered "yes"
+twice, because nothing in that architecture could route "yes" anywhere
+useful either.
+
+`agent.graphs.orchestrator` is a tool-calling design instead: one LLM node
+bound to five tools (`query_data`, `make_chart`, `run_eda`,
+`propose_transform`, `propose_join`) decides whether a question needs zero,
+one, or more of them, looping (capped at `MAX_TOOL_ROUNDS`) until it either
+calls a tool or answers directly. Anything that doesn't need fresh
+computation against the data - explanation, confirmation, chitchat - gets a
+direct answer with no tool call at all (`route` comes back as `"chat"` for
+these), which is exactly the class of turn the old router had no home for.
+
+This is not a rewrite of the safety-critical logic, and that's deliberate:
+- **Every tool is a thin wrapper around `agent.graphs.qa.run_route(route,
+  state)`** - the *exact* node functions (`generate_code`, `execute`,
+  `verify`, retry, chart-spec validation with freehand fallback, transform
+  diff computation) the original graph already used, replayed for a route
+  the orchestrator decided instead of qa.py's own router LLM call.
+  `run_route` and `build_qa_graph()` share the same `_NODE_FUNCS`/
+  `_EDGE_FUNCS`/named `_route_after_*` dispatch functions - if you change
+  routing logic in one, update the other; they're meant to be driven by the
+  identical functions, not two implementations that could drift apart.
+  Every fix already made to that logic (`ARTIFACTS_DIR`/numpy/duckdb
+  sandbox pre-imports, the empty-result verify fix, the chart
+  multi-column-request fallback) applies to the orchestrator automatically.
+- **`propose_transform`/`propose_join` still only ever produce a preview** -
+  they call `run_route("transform"/"join", ...)`, the same deterministic
+  propose pipeline as before. Committing is still a separate, human-gated
+  `POST /transforms/{id}/confirm` call the orchestrator's tools cannot
+  reach - the two-phase safety boundary described under "Transforms, joins
+  & versioning" is unchanged by this architecture switch.
+- **PII discipline is inherited, not reimplemented** - tool results are the
+  same aggregated/formatted `answer` text `_node_respond_answer` already
+  produced, never raw execution output, so `schema_context.py` remains the
+  only channel of dataset-derived content that reaches any prompt.
+- The orchestrator's system prompt (`_ORCHESTRATOR_SYSTEM_PROMPT`) has an
+  explicit rule to quote a tool-returned number exactly, never round or
+  paraphrase it - the one new failure mode this architecture introduces
+  that the old one didn't have is an extra LLM pass to produce the final
+  conversational answer, which could otherwise silently reword a precise
+  result.
+
+`agent.graphs.qa` is **kept, not deleted**, as a documented fallback: pass
+`use_legacy_qa_graph: true` on `POST /chat/ask` to route a specific request
+through it instead - an operator/debugging escape hatch (e.g. to check
+whether an issue is specific to the orchestrator), not a user-facing
+choice. There is deliberately no frontend UI for this switch.
+
+**Phase 7 is not complete just because the orchestrator is the default.**
+What exists now is the architecture and a hand-tested prototype - the
+guardrails half of "Guardrails, Permissions & Observability" (per-session/
+per-user tool-call budgets beyond the flat per-turn `MAX_TOOL_ROUNDS` cap,
+durable audit logging of tool calls beyond the terminal, dedicated PII-leak
+testing for the orchestrator's accumulating multi-round message history,
+permission checks) has not been built yet. Don't treat this as
+production-hardened until that work lands and the verification checklist
+for it has actually been run, per "Before considering any phase done" below.
 
 ## Q&A agent — scope boundary superseded by Phase 6
 

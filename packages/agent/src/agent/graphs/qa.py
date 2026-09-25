@@ -1,5 +1,6 @@
 import io
 import json
+import logging
 import re
 import shutil
 import time
@@ -11,6 +12,8 @@ from typing import Literal, TypedDict
 import pyarrow.parquet as pq
 from langgraph.graph import END, StateGraph
 
+logger = logging.getLogger("agent.qa")
+
 from agent import memory
 from agent.dataset_files import download_active_version
 from agent.llm import get_chat_model, get_response_text
@@ -21,6 +24,7 @@ from agent.schema_context import (
     get_active_dataset,
     get_column_profiles,
     list_other_datasets_brief,
+    render_column_descriptions,
 )
 from core.settings import get_settings
 from core.storage import get_s3_client
@@ -49,6 +53,7 @@ class QAState(TypedDict, total=False):
     user_id: str
     session_id: str
     recent_turns_text: str
+    consecutive_clarify_count: int
     long_term_facts_text: str
     remembered_fact: str | None
     route: str
@@ -161,12 +166,12 @@ Question: {question}
 
 Decide one of:
 - "sql": a straightforward aggregate/filter/count/group-by QUESTION that DuckDB SQL handles well (read-only)
-- "pandas": a QUESTION needing row-wise logic, text analysis, or something SQL is awkward for (read-only)
-- "chart": the question asks for a visualization (chart, plot, graph, histogram, bar chart, line chart, box plot, "show me", "visualize")
+- "pandas": a QUESTION needing row-wise logic, text analysis, or something SQL is awkward for (read-only). This also covers a request to explain, interpret, or define a term from an EARLIER answer already visible in the conversation below (e.g. "what does reject H0 mean", "what does that p-value tell us", "can you explain that result") - the code can just set `result` to a plain-language explanation string without touching the dataframe at all if no new computation is needed. Also route here (not "clarify") a short reply like "yes"/"sure"/"go ahead" that is clearly answering something the assistant itself just asked in the conversation below - that means proceed with what was offered, not ask again.
+- "chart": the question ONLY asks for a visualization of columns as they already exist (chart, plot, graph, histogram, bar chart, line chart, box plot, "show me", "visualize") - it fills a small structured spec, not arbitrary code, so it can plot existing columns but cannot compute a new value (e.g. a fitted model's metrics) first. A question that needs BOTH a computed value AND a plot of that computation (e.g. "train a model and show MSE, R2, and a scatter of actual vs predicted") is "sql"/"pandas", not "chart" - that code can compute the answer AND optionally save a chart alongside it.
 - "eda": asks for an exploratory/profiling overview of the WHOLE dataset ("run EDA", "profile this data", "give me a summary/overview of the dataset")
 - "transform": asks to MODIFY the dataset itself - add/drop/rename a column, filter or dedupe rows, change a column's type, fill/drop missing values, bin a column into categories, clean/standardize text, remove outliers, or any other change to the data. This never happens immediately - it always produces a preview for confirmation first, never mutates anything in place.
 - "join": asks to COMBINE this dataset with ANOTHER named dataset (merge, join, vlookup, "bring in columns from X", "look up Y from the Z dataset")
-- "clarify": too ambiguous to answer confidently against this schema (e.g. references something not clearly identifiable as any column)
+- "clarify": too ambiguous to answer confidently against this schema (e.g. references something not clearly identifiable as any column, or genuinely could mean more than one different thing). Do NOT use this just because a question isn't about the dataset's columns at all - explaining/interpreting a prior result (see "pandas" above) is a real, answerable request, not an ambiguous one.
 
 A question asking WHAT something is stays read-only (sql/pandas/chart/eda). A request asking to CHANGE the data is "transform" or "join" - never silently treat a modification request as a read-only question.
 
@@ -182,7 +187,12 @@ Dataset schema:
 {memory_context}
 
 The dataset is available as a pandas DataFrame: datasets["{dataset_name}"]
-pandas is available as `pd`. DuckDB is available via `import duckdb` if useful.
+pandas is available as `pd`, numpy as `np`, DuckDB as `duckdb` - all pre-imported, no import statements needed for any of them.
+If you use DuckDB: it resolves table names via local Python variable names in scope, not arbitrary
+expressions inside the SQL text - `datasets["{dataset_name}"]['col']` as a FROM target will fail.
+Assign the frame to a plain local variable first, then reference that variable's name in the SQL:
+    df = datasets["{dataset_name}"]
+    result = duckdb.sql("SELECT COUNT(*) FROM df").fetchone()[0]
 
 Approach to use: {route}
 
@@ -190,7 +200,15 @@ Question: {question}
 
 Rules:
 - Assign the final answer to a variable named `result`. Keep it a plain
-  number, string, list, or dict - not a matplotlib figure.
+  number, string, list, or dict - not a matplotlib figure, and never a
+  base64-encoded image string.
+- If the question also asks for a chart/plot alongside the computed answer
+  (e.g. "give me the MSE and a scatter plot of actual vs predicted"), you
+  may ADDITIONALLY save one interactive chart with plotly to the exact path
+  f"{{ARTIFACTS_DIR}}/chart.html" using fig.write_html(path,
+  include_plotlyjs=True) - it will be shown alongside your `result`
+  automatically. This is optional and separate from `result` - do not put
+  chart data (base64 or otherwise) inside `result` itself.
 - Only compute the specific aggregated/filtered answer to the question - do
   not return raw row-level data.
 - If a column named in the question already appears in the dataset schema
@@ -200,6 +218,9 @@ Rules:
   values; recreated logic can silently drift from what was really persisted
   (e.g. a different default/fallback value) and produce an answer that
   contradicts the real data.
+- The schema above already shows each column's current null% - if a column
+  you need is already at 0% null, don't add your own defensive cleaning
+  step for it; only handle nulls that the schema actually shows.
 - Do not touch the network, files outside the sandbox, or subprocesses.
 - Respond with ONLY a single ```python fenced code block, no other text.
 {retry_context}
@@ -263,10 +284,12 @@ Dataset schema:
 {memory_context}
 
 The dataset is available as a pandas DataFrame: datasets["{dataset_name}"]
-pandas is available as `pd`. plotly.express / plotly.graph_objects are available for plotting.
-DuckDB is available via `import duckdb` - if you use it, pass the dataframe directly to
-duckdb.sql("...", ...) or register it first; do not assume a SQL table already exists by the
-dataset's name.
+pandas is available as `pd`, numpy as `np`, DuckDB as `duckdb` - all pre-imported, no import
+statements needed for any of them. plotly.express / plotly.graph_objects are available for
+plotting. If you use DuckDB, assign the frame to a plain local variable first and reference that
+variable's name in the SQL (`df = datasets["{dataset_name}"]; duckdb.sql("SELECT ... FROM df")`) -
+it resolves table names via local Python variable names in scope, not arbitrary expressions in the
+SQL text or the dataset's own name.
 
 Question: {question}
 
@@ -292,7 +315,10 @@ Dataset schema:
 {memory_context}
 
 The dataset is available as a pandas DataFrame: datasets["{dataset_name}"]
-pandas is available as `pd`. DuckDB is available via `import duckdb` if useful.
+pandas is available as `pd`, numpy as `np`, DuckDB as `duckdb` - all pre-imported, no import statements needed for any of them.
+If you use DuckDB, assign the frame to a plain local variable first and reference that variable's
+name in the SQL (`df = datasets["{dataset_name}"]; duckdb.sql("SELECT ... FROM df")`) - it resolves
+table names via local Python variable names in scope, not arbitrary expressions in the SQL text.
 
 Request: {question}
 
@@ -436,6 +462,21 @@ def _node_load_memory(state: QAState) -> QAState:
     turns = memory.get_recent_turns(state.get("session_id"))
     state["recent_turns_text"] = memory.render_recent_turns(turns)
 
+    # How many turns in a row, most-recent-first, were themselves "clarify" -
+    # used as a deterministic circuit breaker in _node_plan. Prompt guidance
+    # alone (see the router prompt) is a soft fix for why this starts
+    # happening; this is the hard backstop that guarantees it can't loop
+    # forever even if some other future question hits the same "doesn't fit
+    # any route" gap - observed live, a real conversation got stuck
+    # re-asking a near-identical clarifying question 3 times in a row even
+    # after the user answered "yes" twice.
+    consecutive_clarify = 0
+    for turn in reversed(turns):
+        if turn.get("route") != "clarify":
+            break
+        consecutive_clarify += 1
+    state["consecutive_clarify_count"] = consecutive_clarify
+
     facts = memory.retrieve_facts(state["user_id"], state["dataset_id"], state["question"])
     state["long_term_facts_text"] = memory.render_facts(facts)
     return state
@@ -489,8 +530,21 @@ def _node_plan(state: QAState) -> QAState:
     except (ValueError, json.JSONDecodeError):
         route, parsed = "pandas", {}
 
+    # Deterministic circuit breaker, not a prompt request - the router
+    # choosing "clarify" twice in a row already means asking a third time
+    # is not going to work either; force an actual attempt instead of
+    # repeating the same unproductive question indefinitely (see
+    # _node_load_memory for how this is computed and why).
+    if route == "clarify" and state.get("consecutive_clarify_count", 0) >= 2:
+        logger.warning(
+            "route=clarify chosen again after %d consecutive clarifies - overriding to pandas to break the loop",
+            state["consecutive_clarify_count"],
+        )
+        route = "pandas"
+
     state["route"] = route
     state["clarification"] = parsed.get("clarification_question") if route == "clarify" else None
+    logger.info("route=%s question=%r", route, state["question"][:120])
     return state
 
 
@@ -539,6 +593,7 @@ def _node_generate_chart_spec(state: QAState) -> QAState:
 
     state["chart_spec"] = spec
     state["attempt"] = state.get("attempt", 0) + 1
+    logger.info("chart_spec attempt=%d spec=%s", state["attempt"], spec)
     return state
 
 
@@ -547,6 +602,7 @@ def _node_validate_chart(state: QAState) -> QAState:
     if requested_type not in SUPPORTED_CHART_TYPES:
         # Not one we structurally validate/render - fall back to freehand
         # generation for this specific request rather than rejecting it.
+        logger.info("chart_type=%r unsupported -> falling back to freehand", requested_type)
         state["chart_spec"] = None
         state["chart_notes"] = []
         state["needs_freehand_chart"] = True
@@ -554,6 +610,25 @@ def _node_validate_chart(state: QAState) -> QAState:
 
     columns = get_column_profiles(state["dataset_id"])
     corrected, notes = validate_chart_spec(state["chart_spec"], columns)
+    if corrected is None:
+        # The structured spec (one x, one y) genuinely can't represent this
+        # request - observed live: "box plot for all 8 numeric columns" made
+        # the spec-filling LLM invent nonexistent column names ('variable',
+        # 'numeric_column') trying to force a many-columns-at-once request
+        # into a single x/y, and this used to dead-end here immediately with
+        # that validation note as the final answer - no retry, no fallback,
+        # even though chart_freehand (arbitrary code) handles the identical
+        # multi-column pattern correctly, proven by it already working for
+        # unsupported chart types like KDE. A supported chart_type whose
+        # spec can't validate gets the same fallback an unsupported one
+        # already gets above, instead of a dead end.
+        logger.info("chart_spec validation failed, unsalvageable -> falling back to freehand")
+        state["chart_spec"] = None
+        state["chart_notes"] = []
+        state["needs_freehand_chart"] = True
+        return state
+    if notes:
+        logger.info("chart_spec auto-corrected: %s", notes)
     state["chart_spec"] = corrected
     state["chart_notes"] = notes
     state["needs_freehand_chart"] = False
@@ -682,6 +757,7 @@ def _node_execute(state: QAState) -> QAState:
         datasets[state["right_dataset_name"]] = Path(state["right_local_path"])
 
     timeout = EDA_TIMEOUT_SECONDS if state["route"] == "eda" else EXECUTION_TIMEOUT_SECONDS
+    logger.info("executing code (attempt=%s, %d chars):\n%s", state.get("attempt"), len(state["code"] or ""), state["code"])
     res = run_python(state["code"], datasets, timeout_seconds=timeout)
     state["artifacts"] = res.artifacts
     state["execution_result"] = {
@@ -693,6 +769,12 @@ def _node_execute(state: QAState) -> QAState:
         "rejected": res.rejected,
         "oom_killed": res.oom_killed,
     }
+    if res.error:
+        logger.info("execution error: %s", res.error)
+    else:
+        logger.info(
+            "execution ok: result_type=%s artifacts=%s", type(res.result).__name__, list(res.artifacts or {})
+        )
     return state
 
 
@@ -718,7 +800,17 @@ def _node_verify(state: QAState) -> QAState:
     if state["route"] == "chart":
         if "chart.html" not in (state.get("artifacts") or {}):
             state["verified"] = False
-            state["verification_error"] = "The chart code ran but did not produce a chart.html artifact."
+            # Actionable, not just descriptive - a generic "no artifact"
+            # message left retries guessing at a cause (observed: the model
+            # started using os.getenv("ARTIFACTS_DIR") with a fallback path
+            # on a later attempt, since it's a plain namespace variable, not
+            # an env var - that silently wrote the file to the wrong place).
+            state["verification_error"] = (
+                'The chart code ran but did not produce a chart.html artifact. Save it to the exact path '
+                'f"{ARTIFACTS_DIR}/chart.html" - ARTIFACTS_DIR is already a plain string variable in your '
+                "script's namespace, not an environment variable. Do not use os.getenv/os.environ or guess "
+                "a fallback path."
+            )
             return state
         state["verified"] = True
         state["verification_error"] = None
@@ -770,10 +862,17 @@ def _node_verify(state: QAState) -> QAState:
 
 def _should_retry(state: QAState) -> Literal["retry", "finalize", "respond"]:
     if state.get("verified"):
+        logger.info("verified ok (attempt=%s)", state.get("attempt"))
         return "finalize" if state["route"] in ("transform", "join") else "respond"
     if state["route"] == "eda":
+        logger.info("verify failed, eda is deterministic so not retrying: %s", state.get("verification_error"))
         return "respond"  # deterministic code - retrying identically won't change the outcome
-    return "retry" if state.get("attempt", 0) < MAX_ATTEMPTS else "respond"
+    decision = "retry" if state.get("attempt", 0) < MAX_ATTEMPTS else "respond"
+    logger.info(
+        "verify failed (attempt=%s/%s) -> %s, reason: %s",
+        state.get("attempt"), MAX_ATTEMPTS, decision, state.get("verification_error"),
+    )
+    return decision
 
 
 def _node_prepare_retry(state: QAState) -> QAState:
@@ -841,14 +940,22 @@ def _node_respond_answer(state: QAState) -> QAState:
 
     if state["route"] == "chart" and not state.get("needs_freehand_chart") and state.get("execution_result") is None:
         # validate_chart couldn't salvage the structured spec at all - never reached execute.
+        # As of the needs_freehand_chart fix above this should be rare (an
+        # unsalvageable spec now falls back to freehand instead of landing
+        # here) - if this still fires, freehand didn't run either, worth a
+        # closer look.
         reason = " ".join(state.get("chart_notes") or []) or "I couldn't map that to a valid chart for this data."
+        logger.info("chart dead-end (no freehand fallback reached): %s", reason)
         state["answer"] = reason
         state["final_error"] = reason
         return state
 
     if state["route"] == "join" and state.get("execution_result") is None:
-        # resolve_join_dataset or validate_join failed outright - never reached execute.
+        # resolve_join_dataset or validate_join failed outright - never reached
+        # execute. Unlike chart, join has no freehand fallback to reach for,
+        # so this dead end is legitimate - still logged so it's visible why.
         reason = state.get("verification_error") or "I couldn't set up that join."
+        logger.info("join dead-end (no freehand alternative exists): %s", reason)
         state["answer"] = reason
         state["final_error"] = reason
         return state
@@ -877,9 +984,15 @@ def _node_respond_answer(state: QAState) -> QAState:
 
     if state["route"] == "eda":
         result = state["execution_result"]["result"] or {}
+        # The HTML report is stats/profiling only (types, nulls, distributions)
+        # - it never carries the per-column semantic descriptions written once
+        # at upload time. A user asking "what does each column mean" wants
+        # those, not (only) the profiling report, so surface both here rather
+        # than making that a separate, harder-to-route request.
         state["answer"] = (
             f"EDA report generated: {result.get('rows', '?')} rows, {result.get('columns', '?')} columns, "
-            f"{result.get('duplicate_rows', '?')} duplicate row(s)."
+            f"{result.get('duplicate_rows', '?')} duplicate row(s).\n\n"
+            f"Column descriptions:\n{render_column_descriptions(state['dataset_id'])}"
         )
         return state
 
@@ -914,6 +1027,121 @@ def _effective_route(planned_route: str, code: str | None, needs_freehand_chart:
     if planned_route in ("clarify", "chart", "eda", "transform", "join") or not code:
         return planned_route
     return "sql" if "duckdb" in code else "pandas"
+
+
+def _route_from_plan(state: QAState) -> str:
+    route = state["route"]
+    if route == "clarify":
+        return "respond"
+    if route == "chart":
+        return "generate_chart_spec"
+    if route == "eda":
+        return "run_eda"
+    if route == "transform":
+        return "generate_transform"
+    if route == "join":
+        return "generate_join_spec"
+    return "generate_code"
+
+
+def _route_after_validate_chart(state: QAState) -> str:
+    if state.get("needs_freehand_chart"):
+        return "generate_freehand_chart"
+    return "prepare_chart_code" if state.get("chart_spec") else "respond"
+
+
+def _route_after_resolve_join(state: QAState) -> str:
+    return "validate_join" if state.get("right_dataset_name") else "respond"
+
+
+def _route_after_validate_join(state: QAState) -> str:
+    return "prepare_join_code" if state.get("join_spec") else "respond"
+
+
+def _route_after_prepare_retry(state: QAState) -> str:
+    if state.get("needs_freehand_chart"):
+        return "generate_freehand_chart"
+    route = state.get("route")
+    if route == "chart":
+        return "generate_chart_spec"
+    if route == "join":
+        return "generate_join_spec"
+    if route == "transform":
+        return "generate_transform"
+    return "generate_code"
+
+
+# Node-name -> node-function and node-name -> next-node-name tables mirroring
+# build_qa_graph()'s wiring exactly (same functions, not a reimplementation).
+# Used by run_route() below to replay one route's node sequence outside the
+# compiled graph - see run_route's own docstring for why that exists.
+_NODE_FUNCS = {
+    "generate_code": _node_generate_code,
+    "generate_chart_spec": _node_generate_chart_spec,
+    "validate_chart": _node_validate_chart,
+    "prepare_chart_code": _node_prepare_chart_code,
+    "generate_freehand_chart": _node_generate_freehand_chart,
+    "run_eda": _node_run_eda,
+    "generate_transform": _node_generate_transform,
+    "generate_join_spec": _node_generate_join_spec,
+    "resolve_join_dataset": _node_resolve_join_dataset,
+    "validate_join": _node_validate_join,
+    "prepare_join_code": _node_prepare_join_code,
+    "execute": _node_execute,
+    "verify": _node_verify,
+    "prepare_retry": _node_prepare_retry,
+    "finalize_transform": _node_finalize_transform,
+}
+
+
+def _route_after_verify(state: QAState) -> str:
+    decision = _should_retry(state)
+    return {"retry": "prepare_retry", "finalize": "finalize_transform", "respond": "respond"}[decision]
+
+
+_EDGE_FUNCS = {
+    "generate_code": lambda s: "execute",
+    "generate_transform": lambda s: "execute",
+    "run_eda": lambda s: "execute",
+    "generate_chart_spec": lambda s: "validate_chart",
+    "validate_chart": _route_after_validate_chart,
+    "prepare_chart_code": lambda s: "execute",
+    "generate_freehand_chart": lambda s: "execute",
+    "generate_join_spec": lambda s: "resolve_join_dataset",
+    "resolve_join_dataset": _route_after_resolve_join,
+    "validate_join": _route_after_validate_join,
+    "prepare_join_code": lambda s: "execute",
+    "execute": lambda s: "verify",
+    "verify": _route_after_verify,
+    "prepare_retry": _route_after_prepare_retry,
+    "finalize_transform": lambda s: "respond",
+}
+
+
+def run_route(route: str, base_state: QAState) -> QAState:
+    """Drives a QAState through the same node sequence build_qa_graph() would
+    for a given route, starting past the router/dataset/memory preamble -
+    used by the tool-calling orchestrator graph (agent.graphs.orchestrator),
+    whose orchestrator node already decided which capability to use (via
+    tool selection) and already loaded dataset/memory context itself, so
+    there's no router LLM call to make here and no plan/resolve_dataset/
+    load_memory nodes to run again.
+
+    This replays _NODE_FUNCS/_EDGE_FUNCS - the exact functions
+    build_qa_graph() wires up, not a reimplementation - specifically so
+    every fix made to the main graph (retry behavior, chart freehand
+    fallback, verify heuristics, ARTIFACTS_DIR handling, etc.) applies here
+    automatically with no risk of the two call paths drifting apart. If you
+    add a new route or change routing logic in build_qa_graph(), update the
+    corresponding _route_after_* function here too - they must stay in sync.
+    """
+    state: QAState = dict(base_state)
+    state["route"] = route
+    node = _route_from_plan(state)
+    while node != "respond":
+        state = _NODE_FUNCS[node](state)
+        node = _EDGE_FUNCS[node](state)
+    return _node_respond_answer(state)
 
 
 def build_qa_graph():
@@ -951,42 +1179,19 @@ def build_qa_graph():
         "extract_memory", lambda s: "respond" if s.get("route") == "memory_ack" else "plan"
     )
 
-    def _route_from_plan(s: QAState) -> str:
-        route = s["route"]
-        if route == "clarify":
-            return "respond"
-        if route == "chart":
-            return "generate_chart_spec"
-        if route == "eda":
-            return "run_eda"
-        if route == "transform":
-            return "generate_transform"
-        if route == "join":
-            return "generate_join_spec"
-        return "generate_code"
-
     graph.add_conditional_edges("plan", _route_from_plan)
     graph.add_edge("generate_code", "execute")
     graph.add_edge("generate_transform", "execute")
     graph.add_edge("run_eda", "execute")
 
     graph.add_edge("generate_chart_spec", "validate_chart")
-    graph.add_conditional_edges(
-        "validate_chart",
-        lambda s: "generate_freehand_chart"
-        if s.get("needs_freehand_chart")
-        else ("prepare_chart_code" if s.get("chart_spec") else "respond"),
-    )
+    graph.add_conditional_edges("validate_chart", _route_after_validate_chart)
     graph.add_edge("prepare_chart_code", "execute")
     graph.add_edge("generate_freehand_chart", "execute")
 
     graph.add_edge("generate_join_spec", "resolve_join_dataset")
-    graph.add_conditional_edges(
-        "resolve_join_dataset", lambda s: "validate_join" if s.get("right_dataset_name") else "respond"
-    )
-    graph.add_conditional_edges(
-        "validate_join", lambda s: "prepare_join_code" if s.get("join_spec") else "respond"
-    )
+    graph.add_conditional_edges("resolve_join_dataset", _route_after_resolve_join)
+    graph.add_conditional_edges("validate_join", _route_after_validate_join)
     graph.add_edge("prepare_join_code", "execute")
 
     graph.add_edge("execute", "verify")
@@ -995,17 +1200,7 @@ def build_qa_graph():
     )
     graph.add_edge("finalize_transform", "respond")
     graph.add_edge("respond", "save_turn")
-    graph.add_conditional_edges(
-        "prepare_retry",
-        lambda s: "generate_freehand_chart"
-        if s.get("needs_freehand_chart")
-        else (
-            "generate_chart_spec" if s.get("route") == "chart"
-            else "generate_join_spec" if s.get("route") == "join"
-            else "generate_transform" if s.get("route") == "transform"
-            else "generate_code"
-        ),
-    )
+    graph.add_conditional_edges("prepare_retry", _route_after_prepare_retry)
     graph.add_edge("save_turn", END)
 
     return graph.compile()
@@ -1019,6 +1214,7 @@ def ask(dataset_ids: list[str], question: str, user_id: str, session_id: str) ->
     duplicate that decision.
     """
     graph = build_qa_graph()
+    logger.info("ask() start: user_id=%s session_id=%s dataset_ids=%s question=%r", user_id, session_id, dataset_ids, question)
     start = time.monotonic()
     final_state: QAState = graph.invoke(
         {
@@ -1043,15 +1239,33 @@ def ask(dataset_ids: list[str], question: str, user_id: str, session_id: str) ->
     exec_result = final_state.get("execution_result") or {}
     artifacts = final_state.get("artifacts") or {}
     artifact_bytes = artifacts.get("chart.html") or artifacts.get("eda.html")
+    effective_route = _effective_route(
+        final_state.get("route", ""), final_state.get("code"), final_state.get("needs_freehand_chart", False)
+    )
+    final_error = final_state.get("final_error")
+
+    # The single line worth grepping the terminal for - a 200 response tells
+    # you nothing about whether the agent actually succeeded (a graceful
+    # "I couldn't do that" is still HTTP 200). This is a WARNING when there
+    # was a final_error specifically so it's visually distinct from the
+    # normal INFO trace above it while actively developing.
+    log = logger.warning if final_error else logger.info
+    log(
+        "ask() done: route=%s effective_route=%s attempts=%s duration=%.1fs has_artifact=%s error=%r",
+        final_state.get("route"),
+        effective_route,
+        final_state.get("attempt", 0),
+        duration,
+        bool(artifact_bytes),
+        final_error,
+    )
 
     return QAResult(
         answer=final_state.get("answer", ""),
-        route=_effective_route(
-            final_state.get("route", ""), final_state.get("code"), final_state.get("needs_freehand_chart", False)
-        ),
+        route=effective_route,
         code=final_state.get("code"),
         result=exec_result.get("result"),
-        error=final_state.get("final_error"),
+        error=final_error,
         prompt_tokens=final_state.get("prompt_tokens", 0),
         completion_tokens=final_state.get("completion_tokens", 0),
         duration_seconds=duration,
