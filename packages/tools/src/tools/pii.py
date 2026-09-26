@@ -65,3 +65,69 @@ def scan_column(column_name: str, sample_values: list, is_categorical: bool = Fa
         entities.add(r.entity_type)
 
     return bool(entities), sorted(entities)
+
+
+_REDACTED = "[redacted: PII column]"
+
+
+def redact_pii_from_result(result: object, pii_columns: set[str], pii_values: set[str] | None = None) -> object:
+    """Enforcement, not a hint: strips PII-flagged data out of an
+    already-executed result, before it can become the user-facing answer or
+    get replayed into a future prompt via short-term memory
+    (agent.memory.append_turn stores exactly this `answer` text verbatim).
+    scan_column/is_pii only ever fed a *warning* into the code-gen prompt
+    ("don't echo raw values from this column") - the model could ignore it,
+    or write code that selects the column without realizing it. This checks
+    what the code actually returned.
+
+    Two independent checks, because a PII leak doesn't always carry the
+    column name with it:
+    - By column NAME: any value keyed by a PII-flagged column name (a plain
+      dict/list-of-dicts from .to_dict(), or the sandbox's dataframe-preview
+      shape {"type": "dataframe", "columns": [...], "preview": [...]} - the
+      latter needs its "columns" list filtered too, not just each preview
+      record, so a caller doesn't even see the PII column was selected).
+    - By VALUE: `pii_values` (the PII columns' actual values, read from the
+      real dataset by the caller - see agent.graphs.qa._node_execute) - a
+      bare leaf scalar/string matching one exactly gets redacted even with
+      no column name anywhere in the structure. This is load-bearing, not
+      redundant with the name-based check: `df["region"].unique().tolist()`
+      returns a plain list of strings with no column name attached at all -
+      verified live, this was a real leak the name-only check missed
+      entirely (a PII-flagged "region" column's raw values reached the
+      final answer untouched).
+
+    Known gap, not covered here: a PII column's raw *values* used as dict
+    keys (e.g. `df.groupby("email")[...].to_dict()` produces
+    {"a@x.com": 5, ...}). Redacting a key would either leave the leaked
+    value in place as a key anyway, or collapse multiple distinct keys onto
+    the same placeholder and silently lose data - neither is a real fix, so
+    this is left as a known gap rather than a false sense of coverage.
+    """
+    if not pii_columns:
+        return result
+
+    lowered = {c.lower() for c in pii_columns}
+    values = {str(v) for v in pii_values} if pii_values else set()
+
+    def _is_pii_value(value: object) -> bool:
+        return bool(values) and isinstance(value, (str, int, float)) and not isinstance(value, bool) and str(value) in values
+
+    def _redact(value: object) -> object:
+        if isinstance(value, dict):
+            if value.get("type") == "dataframe" and "columns" in value:
+                redacted = dict(value)
+                redacted["columns"] = [c for c in value["columns"] if c.lower() not in lowered]
+                redacted["preview"] = [_redact(row) for row in value.get("preview", [])]
+                return redacted
+            return {
+                k: (_REDACTED if (isinstance(k, str) and k.lower() in lowered) else _redact(v))
+                for k, v in value.items()
+            }
+        if isinstance(value, list):
+            return [_REDACTED if _is_pii_value(item) else _redact(item) for item in value]
+        if _is_pii_value(value):
+            return _REDACTED
+        return value
+
+    return _redact(result)

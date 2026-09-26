@@ -16,10 +16,11 @@ export interface DisplayMessage {
 
 interface Props {
   message: DisplayMessage
+  userId: string
   onTransformResolved: (pendingId: string, status: 'confirmed' | 'rejected') => void
 }
 
-export default function MessageBubble({ message, onTransformResolved }: Props) {
+export default function MessageBubble({ message, userId, onTransformResolved }: Props) {
   const [resolving, setResolving] = useState(false)
   const [resolved, setResolved] = useState<'confirmed' | 'rejected' | null>(null)
   const [resolveError, setResolveError] = useState<string | null>(null)
@@ -29,7 +30,7 @@ export default function MessageBubble({ message, onTransformResolved }: Props) {
     setResolving(true)
     setResolveError(null)
     try {
-      await confirmTransform(message.pendingTransformId)
+      await confirmTransform(message.pendingTransformId, userId)
       setResolved('confirmed')
       onTransformResolved(message.pendingTransformId, 'confirmed')
     } catch (e) {

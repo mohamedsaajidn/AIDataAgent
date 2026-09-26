@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from agent.tracing import setup_tracing
 from api.routes.chat import router as chat_router
 from api.routes.datasets import router as datasets_router
 from api.routes.transforms import router as transforms_router
@@ -29,6 +30,7 @@ logger = logging.getLogger("api")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(get_engine())
+    setup_tracing()
     yield
 
 

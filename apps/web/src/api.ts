@@ -59,8 +59,10 @@ export function getSessionHistory(sessionId: string): Promise<SessionHistory> {
   return request(`/chat/sessions/${sessionId}`)
 }
 
-export function confirmTransform(pendingId: string): Promise<unknown> {
-  return request(`/transforms/${pendingId}/confirm`, { method: 'POST' })
+export function confirmTransform(pendingId: string, userId: string): Promise<unknown> {
+  return request(`/transforms/${pendingId}/confirm?${new URLSearchParams({ user_id: userId })}`, {
+    method: 'POST',
+  })
 }
 
 export function rejectTransform(pendingId: string): Promise<unknown> {
@@ -71,8 +73,8 @@ export function listVersions(datasetId: string): Promise<VersionsResponse> {
   return request(`/datasets/${datasetId}/versions`)
 }
 
-export function setActiveVersion(datasetId: string, versionId: string): Promise<unknown> {
-  return request(`/datasets/${datasetId}/active-version`, {
+export function setActiveVersion(datasetId: string, versionId: string, userId: string): Promise<unknown> {
+  return request(`/datasets/${datasetId}/active-version?${new URLSearchParams({ user_id: userId })}`, {
     method: 'POST',
     body: JSON.stringify({ version_id: versionId }),
   })

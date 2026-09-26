@@ -96,6 +96,14 @@ class User(Base):
     or auto-created on first use. This is an identity anchor, not a login
     system - it exists so long-term memory has something stable to key on
     across sessions.
+
+    `role` (Phase 7 RBAC) is deliberately NOT something the caller can set
+    via the request - it's stored here, on the row, and only ever changed
+    by a direct DB update (see scripts/promote_user.py) or a future admin
+    endpoint. A caller-supplied "I'm an editor" field would be trivially
+    self-granted and defeat the entire point of the checklist item ("even
+    by asking the agent directly"). New users default to "viewer" -
+    least-privilege by default, not "editor unless told otherwise".
     """
 
     __tablename__ = "users"
@@ -103,6 +111,7 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     external_id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     display_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    role: Mapped[str] = mapped_column(String, nullable=False, default="viewer")  # "viewer" | "editor"
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

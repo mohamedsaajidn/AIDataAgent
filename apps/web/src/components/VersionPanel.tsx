@@ -5,9 +5,10 @@ import type { DatasetSummary, VersionsResponse } from '../types'
 interface Props {
   datasetId: string | null
   datasets: DatasetSummary[]
+  userId: string
 }
 
-export default function VersionPanel({ datasetId, datasets }: Props) {
+export default function VersionPanel({ datasetId, datasets, userId }: Props) {
   const [data, setData] = useState<VersionsResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -38,7 +39,7 @@ export default function VersionPanel({ datasetId, datasets }: Props) {
     setSwitching(versionId)
     setError(null)
     try {
-      await setActiveVersion(datasetId, versionId)
+      await setActiveVersion(datasetId, versionId, userId)
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))

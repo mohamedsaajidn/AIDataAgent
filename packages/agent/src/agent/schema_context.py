@@ -126,6 +126,20 @@ def render_column_descriptions(dataset_id: str) -> str:
     return "\n".join(lines)
 
 
+def get_pii_column_names(dataset_id: str) -> set[str]:
+    """Names of columns flagged PII on the active version - used to enforce
+    (not just prompt-hint) that raw PII values never reach an LLM prompt or
+    the user-facing answer, by redacting any executed code's result before
+    it becomes `answer` (see qa._node_execute). Phase 7 guardrail: the
+    schema-text warning to the code-gen LLM ("don't echo raw values from
+    this column") was always just a request the model could ignore or get
+    wrong - this is the actual enforcement point, checked against what the
+    code really returned, not what it was told to do.
+    """
+    _, version = get_active_dataset(dataset_id)
+    return {c.name for c in version.columns if c.is_pii}
+
+
 def get_column_profiles(dataset_id: str) -> dict[str, dict]:
     """Structured (not prompt-text) column metadata, for deterministic
     validation code (e.g. chart spec validation) rather than LLM prompts.

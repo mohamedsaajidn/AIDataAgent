@@ -37,6 +37,8 @@ side-by-side comparison against the default qa.py graph before any cutover.
 import logging
 import shutil
 import time
+import uuid
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -59,7 +61,9 @@ from agent.graphs.qa import (
     _node_save_turn,
     run_route,
 )
+from agent.graphs.qa import _artifact_sidecar as qa_artifact_sidecar
 from agent.llm import get_chat_model, get_response_text
+from agent.tracing import get_tracer
 
 logger = logging.getLogger("agent.orchestrator")
 
@@ -71,6 +75,25 @@ logger = logging.getLogger("agent.orchestrator")
 # Matters more now that the model is a paid frontier model (GPT-4o-mini) -
 # no free-tier rate-limit pressure capping this implicitly like before.
 MAX_TOOL_ROUNDS = 3
+
+# A chart/EDA artifact is inline HTML with plotly.js embedded
+# (packages/sandbox's fig.write_html(..., include_plotlyjs=True) - always
+# True, never "cdn", see CLAUDE.md's sandbox notes for why) - genuinely
+# several MB. OrchestratorState is a LangGraph state dict, and
+# LangChainInstrumentor auto-traces every node's full state as span
+# input/output, so putting that much content directly in state means EVERY
+# subsequent node span (from the tool call onward: the follow-up LLM call,
+# save_turn, finalize, ...) re-serializes the same multi-MB blob. Verified
+# live: this blew past Phoenix's OTLP gRPC receive limit (4MB default,
+# observed growing to ~40MB across retried batches) and silently dropped
+# entire trace batches - not just the oversized span, other unrelated
+# spans caught in the same failed batch too. Fixed by keeping only a small
+# reference key in traced state and stashing the real bytes here, read
+# back once in ask() (outside the graph, never traced) and popped
+# immediately after - never a long-lived cache, just a way to get a large
+# payload from one point in the same process to another without it passing
+# through anything LangChain auto-serializes.
+_artifact_sidecar: dict[str, bytes | str] = {}
 
 
 class OrchestratorState(TypedDict, total=False):
@@ -97,7 +120,7 @@ class OrchestratorState(TypedDict, total=False):
     answer: str | None
     code: str | None
     result: object
-    artifact_html: str | None
+    artifact_ref: str | None
     diff: dict | None
     pending_parquet_key: str | None
     join_spec: dict | None
@@ -216,7 +239,11 @@ def _build_sub_state(state: OrchestratorState, question: str) -> QAState:
 
 def _extract_tool_result(planned_route: str, result_state: QAState) -> tuple[str, dict]:
     answer = result_state.get("answer") or "(no answer produced)"
-    artifacts = result_state.get("artifacts") or {}
+    # Popped from qa.py's own sidecar, not read from state - see
+    # qa._artifact_sidecar's module docstring (run_route() shares
+    # qa._node_execute, so the real bytes were already stashed there, never
+    # in this traced state dict).
+    artifacts = qa_artifact_sidecar.pop(result_state.get("artifact_ref"), {})
     artifact_bytes = artifacts.get("chart.html") or artifacts.get("eda.html")
 
     updates: dict = {
@@ -235,7 +262,9 @@ def _extract_tool_result(planned_route: str, result_state: QAState) -> tuple[str
     if exec_result is not None:
         updates["result"] = exec_result.get("result")
     if artifact_bytes:
-        updates["artifact_html"] = artifact_bytes.decode("utf-8") if isinstance(artifact_bytes, bytes) else artifact_bytes
+        ref = uuid.uuid4().hex
+        _artifact_sidecar[ref] = artifact_bytes
+        updates["artifact_ref"] = ref
     if result_state.get("diff"):
         updates["diff"] = result_state["diff"]
         updates["pending_parquet_key"] = result_state.get("pending_parquet_key")
@@ -388,18 +417,31 @@ def ask(dataset_ids: list[str], question: str, user_id: str, session_id: str) ->
         user_id, session_id, dataset_ids, question,
     )
     start = time.monotonic()
-    final_state: OrchestratorState = graph.invoke(
-        {
-            "dataset_ids": dataset_ids,
-            "question": question,
-            "user_id": user_id,
-            "session_id": session_id,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "tool_round_count": 0,
-            "tools_used": [],
-        }
-    )
+    # LangChainInstrumentor traces every LangGraph node and LLM call via
+    # LangChain's own callback run-tree, independent of ambient OTel
+    # context - but any manually-created span outside that run-tree (e.g.
+    # qa._node_execute's sandbox.execute span) has no ambient parent to
+    # inherit once execution is back in plain Python, and comes out as its
+    # own orphaned trace (verified live: a different trace_id entirely,
+    # not just a wrong parent within the same one). Opening an explicit
+    # span around the whole invocation gives that plain-Python code a real
+    # ambient parent to attach to, so the full plan/code/execute/verify/
+    # answer shape lands in one trace instead of scattering across two.
+    tracer = get_tracer()
+    span_cm = tracer.start_as_current_span("orchestrator.ask") if tracer is not None else nullcontext()
+    with span_cm:
+        final_state: OrchestratorState = graph.invoke(
+            {
+                "dataset_ids": dataset_ids,
+                "question": question,
+                "user_id": user_id,
+                "session_id": session_id,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "tool_round_count": 0,
+                "tools_used": [],
+            }
+        )
     duration = time.monotonic() - start
 
     local_path = final_state.get("local_data_path")
@@ -411,11 +453,18 @@ def ask(dataset_ids: list[str], question: str, user_id: str, session_id: str) ->
 
     route = final_state.get("route") or "chat"
     final_error = final_state.get("final_error")
+    # Resolved outside the graph (never traced) and popped immediately -
+    # see _artifact_sidecar's docstring for why this can't just be a state
+    # field like everything else here.
+    artifact_ref = final_state.get("artifact_ref")
+    artifact_bytes = _artifact_sidecar.pop(artifact_ref, None) if artifact_ref else None
+    artifact_html = artifact_bytes.decode("utf-8") if isinstance(artifact_bytes, bytes) else artifact_bytes
+
     log = logger.warning if final_error else logger.info
     log(
         "ask() [orchestrator] done: route=%s tools_used=%s tool_rounds=%s duration=%.1fs has_artifact=%s error=%r",
         route, final_state.get("tools_used"), final_state.get("tool_round_count", 0), duration,
-        bool(final_state.get("artifact_html")), final_error,
+        bool(artifact_html), final_error,
     )
 
     return QAResult(
@@ -428,7 +477,7 @@ def ask(dataset_ids: list[str], question: str, user_id: str, session_id: str) ->
         completion_tokens=final_state.get("completion_tokens", 0),
         duration_seconds=duration,
         attempts=final_state.get("tool_round_count", 0),
-        artifact_html=final_state.get("artifact_html"),
+        artifact_html=artifact_html,
         diff=final_state.get("diff"),
         pending_parquet_key=final_state.get("pending_parquet_key"),
         join_spec=final_state.get("join_spec"),

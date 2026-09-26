@@ -63,8 +63,31 @@ services:
     volumes:
       - chroma_data:/chroma/chroma
 
+  # Phase 7 observability. Single container, SQLite-backed - chosen over
+  # Langfuse (v3 needs Postgres+ClickHouse+Redis+MinIO, 16GB min for itself
+  # alone) and Comet Opik (architecturally just as heavy) specifically
+  # because neither fits this machine's ~16GB total RAM. See CLAUDE.md's
+  # "Guardrails: PII enforcement & RBAC" / observability section for the
+  # full rationale. 6006 = UI + OTLP HTTP, 4317 = OTLP gRPC (what
+  # api.main's instrumentation actually exports to).
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"
+      - "4317:4317"
+    volumes:
+      - phoenix_data:/mnt/data
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6006')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   postgres_data:
   minio_data:
   redis_data:
   chroma_data:
+  phoenix_data:

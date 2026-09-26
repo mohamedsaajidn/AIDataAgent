@@ -230,9 +230,14 @@ project (`[tool.uv] package = false`) that depends on every member so a single
 
 ## Local infra = docker-shaped cloud infra, always
 
-- Postgres, MinIO (S3-compatible), Redis, and Chroma run via
-  `docker-compose up` — never installed natively, never SQLite, never a bare
-  filesystem folder standing in for object storage.
+- Postgres, MinIO (S3-compatible), Redis, Chroma, and Phoenix (Phase 7
+  observability - see its own section below) run via `docker-compose up` —
+  never installed natively, never SQLite, never a bare filesystem folder
+  standing in for object storage. The "never SQLite" rule is about this
+  project's own data stores - Phoenix's internal SQLite (inside its own
+  container, not something this codebase talks to directly) is a
+  vendored third-party tool's storage choice, not an exception being made
+  for this project's data.
 - All connection info comes from `core.settings.get_settings()`, which reads
   `.env`. Never hardcode a host, port, bucket name, or credential anywhere
   outside `packages/core`. This is what keeps "move to the cloud" a config
@@ -334,12 +339,262 @@ project (`[tool.uv] package = false`) that depends on every member so a single
 - Raw row-level data is never sent to the LLM. Only schema, column
   stats/samples, and aggregated results go into prompts.
 - Columns flagged as PII during profiling are excluded from prompts and
-  from any response text unless the user explicitly requests otherwise
-  post-Phase-7 guardrails.
+  from any response text — see "Guardrails: PII enforcement & RBAC" below
+  for how this is actually enforced, not just prompted for.
 - Destructive operations (column drop, in-place-feeling overwrite, a join
   that changes row count) require an explicit preview + confirmation step
   (`PendingTransform` — see "Transforms, joins & versioning" below) — never
   auto-commit a transform.
+
+## Guardrails: PII enforcement & RBAC (Phase 7)
+
+- **PII enforcement is a redaction chokepoint, not a prompt hint.**
+  `schema_context.build_schema_context()`'s `[PII - do not echo raw values]`
+  warning (see "Data handling" above) was always just a request the code-gen
+  LLM could ignore or get wrong - it never actually stopped a raw PII value
+  from reaching a prompt or a user-facing answer if generated code selected
+  that column anyway. The real enforcement is
+  `tools.pii.redact_pii_from_result(result, pii_columns, pii_values)`,
+  called from `agent.graphs.qa._node_execute` on `res.result` before it's
+  stored into `state["execution_result"]["result"]` - the single node both
+  `build_qa_graph()` and `run_route()` (what every orchestrator tool calls)
+  share, so this applies uniformly to every route (Q&A, chart, EDA,
+  transform, join) with no route-specific duplication. `pii_columns` comes
+  from `schema_context.get_pii_column_names(dataset_id)`, combined with the
+  right-hand dataset's PII columns too when the state has one (a join).
+  This is also what closes the short-term-memory leak path:
+  `agent.memory.append_turn` stores the `answer` text verbatim, and
+  `answer` is built from this already-redacted result, so a PII value
+  redacted on turn N can't resurface by being replayed into turn N+1's
+  prompt via `render_recent_turns`.
+  Two independent checks, not one - verified live that the first alone
+  wasn't enough:
+  - **By column name**: a plain dict/list-of-dicts (a `.to_dict()` result)
+    or the sandbox's dataframe-preview shape
+    (`{"type": "dataframe", "columns": [...], "preview": [...]}`, whose
+    `columns` list is filtered too, not just each preview row, so a caller
+    can't tell the column was even selected).
+  - **By value**: `pii_values` - the PII columns' actual values, read
+    host-side (never inside the sandbox) straight from the local dataset
+    parquet by `qa._collect_pii_values`, capped at 5000 values per column
+    so a high-cardinality PII column can't make the scan itself expensive.
+    This exists because the name-based check has a real blind spot: code
+    like `df["region"].unique().tolist()` returns a bare list of strings
+    with no column name anywhere in the structure - reproduced live before
+    this existed (a PII-flagged "region" column's raw values reached the
+    final answer untouched even though `redact_pii_from_result` was
+    already wired in), fixed by adding the value-level check, then
+    re-verified by grepping the raw exported Phoenix trace content for
+    those exact values and confirming they're genuinely absent - not just
+    checking the API response looked right.
+  Known gap: a PII column's raw *values* used as dict KEYS (e.g. a
+  `groupby("email")` result -> `{"a@x.com": 5}`) aren't caught - redacting
+  a key would either leave the value in place as the key anyway, or
+  collapse multiple distinct keys onto one placeholder and silently lose
+  data, so this stays a documented gap rather than a half-fix.
+- **RBAC role lives on the `User` row, never on the request.**
+  `core.models.User.role` (`"viewer"` | `"editor"`, default `"viewer"`) is
+  only ever changed by a direct DB update - `scripts/promote_user.py
+  <external_id> <viewer|editor>` - or a future admin endpoint. No API
+  request body or query param can set a caller's own role: `POST
+  /chat/ask`'s `user_id` and everywhere else a caller supplies an identity
+  only ever *resolve* an existing user (`api.services.users.
+  get_or_create_user`, which never sets `role`), never grant one. This is
+  what makes the checklist's "even by asking the agent directly"
+  requirement true architecturally, not just at one endpoint: there is no
+  path, prompt-injection or otherwise, that lets a request change its own
+  privilege.
+- **Enforcement point is the commit, not the propose.** `POST
+  /transforms/{id}/confirm` and `POST /datasets/{id}/active-version` both
+  require `role == "editor"` (`api.services.users.require_editor`, checked
+  via a `user_id` query param, 403 on an under-privileged or unknown user -
+  an unknown external_id fails exactly like a viewer, never a 404, so a
+  probe can't use this to learn who has an account). `POST
+  /transforms/{id}/reject` is deliberately left open to any role - it only
+  discards a preview, never mutates committed state. This lines up with
+  the existing two-phase propose/confirm boundary (see "Transforms, joins &
+  versioning" below): the orchestrator's `propose_transform`/
+  `propose_join` tools already only ever produced a `PendingTransform`
+  preview and had no code path to the confirm endpoint at all - Phase 7
+  doesn't change that shape, it gates the one place a human (or an agent
+  impersonating one) could otherwise commit. Verified live: a viewer-role
+  user asking the agent directly to "drop this column and commit it
+  without asking me to confirm" still only gets offered a preview
+  (`route: "chat"`, no tool call at all in that case); a viewer hitting
+  `confirm` against a real, agent-proposed `PendingTransform` id gets 403
+  and the transform stays `pending`; the same id confirmed by an editor
+  succeeds and produces a new `DatasetVersion`.
+- No login exists in this POC (see "Frontend identity" below), so `role`
+  is the only access boundary that exists right now - treat a "viewer" as
+  the default, least-privilege assumption for any new mutating endpoint,
+  the same way `User.role` already defaults to it.
+
+## Observability (Phase 7) - Arize Phoenix, not Langfuse
+
+- **Phoenix, not Langfuse, and not by default preference.** Langfuse was
+  the originally-requested tool; ruled out after directly measuring this
+  machine (15.7GB total RAM): Langfuse v3 needs Postgres+ClickHouse+Redis+
+  MinIO plus a stated 16GB minimum for itself alone, and v2 (Postgres-only)
+  has been in maintenance mode with security updates ended Q1 2025 -
+  effectively EOL. Comet Opik was also evaluated and ruled out as
+  architecturally just as heavy (ClickHouse+ZooKeeper+MySQL+Redis+MinIO,
+  ~10 containers). Phoenix runs as a **single** SQLite-backed container
+  (`arizephoenix/phoenix:latest` in `docker-compose.yml`, ports 6006 =
+  UI/dashboard + OTLP HTTP, 4317 = OTLP gRPC), is OpenTelemetry-native (not
+  a proprietary SDK - portable instrumentation), and has built-in cost
+  tracking. If you're ever tempted to swap in Langfuse because that's the
+  "standard" choice, re-measure this machine's free RAM first - the
+  constraint that ruled it out hasn't changed just because it's a common
+  recommendation elsewhere.
+- **Registration is one call, one place.** `agent.tracing.setup_tracing()`
+  is called once, from `apps.api.main`'s lifespan, before any graph runs -
+  never instantiate a tracer/instrumentor anywhere else. It's a no-op when
+  `PHOENIX_ENABLED=false` (the default - so a Phoenix-less dev setup, e.g.
+  a quick unit test run, doesn't fail trying to export spans nowhere).
+  When enabled, it calls `phoenix.otel.register()` then
+  `openinference.instrumentation.langchain.LangChainInstrumentor().
+  instrument(...)` - this one call auto-instruments every `model.invoke()`
+  (every route's LLM call, since they all go through `agent.llm.
+  get_chat_model()`) AND every LangGraph node execution as its own child
+  span, because a compiled `StateGraph` is itself a LangChain `Runnable`
+  traced through the same callback manager - verified live, "plan"/
+  "load_dataset"/"verify"/"respond"/etc. all show up as spans with zero
+  manual instrumentation.
+- **The one thing that needs manual instrumentation: sandbox execution.**
+  `sandbox.executor.run_python` is a raw subprocess call, not a LangChain/
+  LangGraph construct, so `qa._node_execute` wraps it in an explicit
+  `sandbox.execute` span (`agent.tracing.get_tracer()`, attributes: route,
+  attempt, timeout, success/timed_out/oom_killed/rejected) - without this
+  the execution phase would be an opaque gap in an otherwise fully
+  annotated trace. `get_tracer()` returns `None` when Phoenix is disabled;
+  every call site wraps the manual span in `contextlib.nullcontext()` in
+  that case so it's never load-bearing for a request to work.
+- **Orphaned-trace fix - real bug, found and fixed live, not theoretical.**
+  A manually-created span (`tracer.start_as_current_span(...)`) relies on
+  ambient OTel context propagation. LangChain/LangGraph's own spans don't -
+  OpenInference nests them via LangChain's callback run-tree instead, which
+  is independent of Python's ambient context. The result, confirmed by
+  directly inspecting exported spans via Phoenix's REST API: the manual
+  `sandbox.execute` span came out with a **completely different trace_id**
+  from the rest of the question's trace - not just mis-nested, a genuinely
+  separate, orphaned trace, even though it's plain synchronous Python code
+  called moments after a correctly-nested LLM span in the exact same call
+  stack. Fixed by wrapping the entire `graph.invoke(...)` call in both
+  `orchestrator.ask()` and `qa.ask()` in its own explicit span
+  (`"orchestrator.ask"` / `"qa.ask"`) - this gives the plain-Python code
+  underneath (the `run_route()` loop, `_node_execute`) a real ambient
+  parent to attach to. Verified live after the fix: one trace_id, one
+  question, `sandbox.execute` a direct child of the wrapping span (a
+  sibling of LangGraph's own auto-instrumented tree, not nested inside
+  `run_tools` specifically - reaching into LangChain's internal run-tree to
+  nest it more precisely wasn't pursued, since "same trace, not orphaned"
+  is what the checklist actually requires). If you add another manual span
+  anywhere in the agent, wrap it the same way or verify empirically (via
+  the REST API, not the UI - the UI can visually hide a missing-parent
+  span) that it lands in the right trace.
+- **Large payloads must never sit in LangGraph state - a second, bigger
+  trace-completeness bug, found the same way (empirically, not assumed
+  fixed after the orphan fix above).** After the orphan fix, chart/EDA
+  requests were STILL intermittently missing spans - including, confusingly,
+  spans belonging to OTHER, unrelated requests made around the same time.
+  Root cause, found by reading the actual uvicorn server log rather than
+  just re-inspecting Phoenix: `opentelemetry.exporter.otlp.proto.grpc.
+  exporter` was logging `RESOURCE_EXHAUSTED - Received message larger than
+  max (4982113 vs. 4194304)`, retrying, and then failing outright with
+  `DEADLINE_EXCEEDED` once the retried batch grew to ~40MB. Chart/EDA
+  artifacts are inline-plotly HTML - several MB each, per the sandbox's
+  hard `include_plotlyjs=True` requirement (see packages/sandbox notes
+  above) - and `orchestrator.py`'s `OrchestratorState` used to carry the
+  full decoded HTML string in an `artifact_html` field. Because
+  LangChainInstrumentor auto-traces every LangGraph node's full state as
+  span input/output, that multi-MB string got re-serialized into EVERY
+  subsequent node's span for the rest of that graph run (the follow-up
+  LLM call, `save_turn`, `finalize`, ...) - confirmed directly:
+  `artifact_html`'s actual length (`4825144` bytes) matched the exporter's
+  logged oversized-message size almost exactly. Once one export batch
+  exceeded Phoenix's OTLP gRPC receive limit (4MB, not currently
+  configurable from this side), the WHOLE BATCH failed - which is why
+  unrelated requests batched alongside it also lost spans, not just the
+  chart trace itself. Fixed at the source, not by raising a limit: the
+  state field was renamed to `artifact_ref` (a short uuid4 string) and the
+  real bytes moved to `orchestrator._artifact_sidecar`, a plain
+  process-local dict outside any traced state - `ask()` resolves the ref
+  back to real content and pops it immediately, after `graph.invoke()`
+  returns, so it's never part of anything OpenInference serializes.
+  **The same bug existed a second, worse time**: `qa.py`'s own
+  `build_qa_graph()` is a real compiled `StateGraph` too (unlike
+  `run_route()`'s plain-Python replay loop), so `QAState`'s old
+  `artifacts: dict[str, bytes]` field - the RAW bytes, not even
+  decoded-to-string - re-serialized into every node from `execute` through
+  `respond`/`save_turn`. Verified live via `use_legacy_qa_graph: true`: a
+  chart request there hit `RESOURCE_EXHAUSTED` at ~44.7MB, worse than the
+  orchestrator path's ~40MB, for the same underlying reason. Fixed the same
+  way: `QAState.artifacts` replaced with `artifact_ref` (a sidecar key) +
+  `artifact_keys` (just the key names, e.g. `["chart.html"]` - cheap, and
+  all `_node_verify`'s presence checks actually need); the real bytes live
+  in `qa._artifact_sidecar`, read (not popped - `run_route()` callers still
+  need it afterward) by `_node_finalize_transform` for `result.parquet`,
+  and popped exactly once at the end by whichever caller resolves it last -
+  `qa.ask()` for the legacy graph, `orchestrator._extract_tool_result` for
+  the orchestrator path (which imports `qa._artifact_sidecar` directly,
+  matching this codebase's existing pattern of orchestrator.py sharing
+  qa.py's private node functions rather than reimplementing them).
+  Verified live: re-ran the exact chart/EDA requests that previously
+  triggered `RESOURCE_EXHAUSTED` (including back-to-back with three other
+  questions to reproduce the batching conditions, and via both the
+  orchestrator AND `use_legacy_qa_graph: true`) - zero export errors, every
+  trace's root span present, and confirmed a transform still completes
+  correctly end-to-end (`_node_finalize_transform`'s sidecar read path).
+  **The general rule this leaves behind**: never add a field to
+  `QAState`/`OrchestratorState` that can hold more than a few KB (an
+  artifact, a large raw result, anything file-sized) - route it through a
+  side channel the same way, in BOTH graphs if the field is shared between
+  them, or a future large payload will silently re-trigger this same
+  failure mode, including for requests that have nothing to do with it.
+- **A trace's root span isn't reliably exported without an explicit
+  flush.** Even after both fixes above, force-flushing matters:
+  `agent.tracing.flush()` (calls the global tracer provider's
+  `force_flush()`) is called once per request from `apps.api.services.
+  chat.ask_question`, right after `agent_fn()` returns, for every request
+  path - not just the happy path. Without it, `BatchSpanProcessor`'s
+  default ~5s export interval left a real, observed window where a
+  request's root span (which ends last, since it wraps the whole
+  `graph.invoke()` call) hadn't been flushed yet when the next request's
+  spans started queuing - not a guaranteed loss on its own, but removing
+  the dependency on batch timing entirely is what made trace completeness
+  actually reliable under back-to-back requests instead of "usually fine."
+- **PII verification is done by grepping raw trace content, not trusting
+  the code** - the checklist's own explicit requirement. Phoenix's REST API
+  (`GET /v1/projects/{id}/spans`) returns full prompt/completion text and
+  tool-call arguments per span (confirmed by inspecting real captured
+  content: generated code, LLM outputs, tool arguments all present in
+  full) - after the PII redaction fix above, a live question that directly
+  asked for a PII-flagged column's raw values was re-run, and the raw
+  values were confirmed **absent** from the entire exported trace by
+  string-searching the actual span dump, not just checking that the API's
+  JSON response looked redacted.
+- **Cost tracking needs per-model configs - there's no default for
+  OpenRouter/Gemini/Vertex models.** Phoenix ships ~63 default pricing
+  configs for OpenAI/Anthropic model names; none of this project's models
+  (`openrouter_model`, `gemini_model`, `vertex_model` - see "LLM provider"
+  above) match those, so cost stays $0 until configured. Done via Phoenix's
+  GraphQL `createModel` mutation (`name`, `provider`, `namePattern` matched
+  against the span's `llm.model_name`, `costs: [{tokenType: "input"|
+  "output", kind: PROMPT|COMPLETION, costPerMillionTokens}]`) - equivalent
+  to Settings > Models in the Phoenix UI at `localhost:6006`, done here via
+  the API instead so it's reproducible. All three currently-configured
+  models have a cost config as of this writing; if `VERTEX_MODEL`/
+  `GEMINI_MODEL`/`OPENROUTER_MODEL` ever change, add a matching one via the
+  same mutation (or the UI) or that model's spend silently reads as $0.
+  Verified live via GraphQL `costSummary`/`spanLatencyMsQuantile` on the
+  `voiceagent` project that both a real, non-zero $ total and a real
+  latency quantile come back - this is also exactly what the Phoenix UI's
+  own cost/latency dashboard reads, so "what did this cost us yesterday"
+  is answerable there without reading raw logs, per the Phase 7 checklist.
+- `PHOENIX_ENABLED`/`PHOENIX_COLLECTOR_ENDPOINT`/`PHOENIX_PROJECT_NAME` are
+  read from `.env` via `core.settings`, same as every other connection
+  detail in this project - see "Local infra = docker-shaped cloud infra,
+  always" above for why nothing about this should ever be hardcoded.
 
 ## Transforms, joins & versioning (Phase 5)
 

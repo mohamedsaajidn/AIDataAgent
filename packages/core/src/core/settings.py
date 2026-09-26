@@ -82,6 +82,17 @@ class Settings(BaseSettings):
     # environment where a user-login credential isn't available at all.
     vertex_credentials_path: str = ""
 
+    # Phase 7 observability (Arize Phoenix, self-hosted via docker-compose -
+    # see CLAUDE.md's "Guardrails" section for why Phoenix over Langfuse).
+    # gRPC, not the 6006 HTTP/UI port - that's what OTel's
+    # OTLPSpanExporter/api.main's instrumentation setup actually dials.
+    # False by default so a plain `uv sync` + no-Phoenix-container dev
+    # setup (e.g. a quick unit test run) doesn't fail trying to export
+    # spans nowhere - flip on once docker-compose up includes phoenix.
+    phoenix_enabled: bool = False
+    phoenix_collector_endpoint: str = "http://localhost:4317"
+    phoenix_project_name: str = "voiceagent"
+
     @property
     def postgres_dsn(self) -> str:
         return (

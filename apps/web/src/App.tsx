@@ -111,7 +111,7 @@ export default function App() {
           onNewChat={handleNewChat}
           onLoadSession={handleLoadSession}
         />
-        <VersionPanel datasetId={focusedVersionDatasetId} datasets={datasets} />
+        <VersionPanel datasetId={focusedVersionDatasetId} datasets={datasets} userId={userId} />
       </div>
     </div>
   )

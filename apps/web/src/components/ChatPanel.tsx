@@ -114,7 +114,7 @@ export default function ChatPanel({
           </p>
         )}
         {messages.map((m, i) => (
-          <MessageBubble key={i} message={m} onTransformResolved={handleTransformResolved} />
+          <MessageBubble key={i} message={m} userId={userId} onTransformResolved={handleTransformResolved} />
         ))}
       </div>
 

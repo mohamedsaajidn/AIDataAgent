@@ -9,6 +9,8 @@ dependencies = [
     "python-multipart>=0.0.32",
     "tools",
     "agent",
+    "arize-phoenix-otel>=0.6",
+    "openinference-instrumentation-langchain>=0.1.29",
 ]
 
 [tool.uv.sources]

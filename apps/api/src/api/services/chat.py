@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 from agent.graphs.orchestrator import ask as ask_orchestrator
 from agent.graphs.qa import ask as ask_legacy_qa
 from agent.schema_context import get_active_dataset
+from agent.tracing import flush as flush_traces
 from api.services.users import get_or_create_user
 from core.db import get_session
 from core.models import ChatMessage, ChatSession, ChatSessionDataset, PendingTransform
@@ -54,6 +55,11 @@ def ask_question(
     agent_fn = ask_legacy_qa if use_legacy_qa_graph else ask_orchestrator
     result = agent_fn(all_dataset_ids, question, user_id=str(user.id), session_id=str(session_id_value))
     latency_ms = int(result.duration_seconds * 1000)
+    # See agent.tracing.flush()'s docstring - without this, some fraction of
+    # requests' trace spans (notably the root wrapping span) never reached
+    # Phoenix at all, verified live. Every request path through here, not
+    # just the happy path, so this can't get silently skipped.
+    flush_traces()
 
     pending_transform_id = None
     if result.route in ("transform", "join") and result.diff and result.pending_parquet_key:

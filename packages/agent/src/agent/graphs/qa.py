@@ -5,6 +5,7 @@ import re
 import shutil
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypedDict
@@ -17,12 +18,14 @@ logger = logging.getLogger("agent.qa")
 from agent import memory
 from agent.dataset_files import download_active_version
 from agent.llm import get_chat_model, get_response_text
+from agent.tracing import get_tracer
 from agent.schema_context import (
     build_schema_context,
     describe_datasets_brief,
     find_dataset_by_name,
     get_active_dataset,
     get_column_profiles,
+    get_pii_column_names,
     list_other_datasets_brief,
     render_column_descriptions,
 )
@@ -31,6 +34,7 @@ from core.storage import get_s3_client
 from sandbox.executor import run_python
 from tools.chart_render import build_chart_code, default_title
 from tools.chart_spec import SUPPORTED_CHART_TYPES, normalize_chart_type, validate_chart_spec
+from tools.pii import redact_pii_from_result
 from tools.diff import compute_diff
 from tools.eda_render import build_eda_code
 from tools.join_render import build_join_code
@@ -39,6 +43,22 @@ from tools.join_spec import validate_join_spec
 MAX_ATTEMPTS = 3
 EXECUTION_TIMEOUT_SECONDS = 20
 EDA_TIMEOUT_SECONDS = 45
+
+# Execution artifacts (chart.html/eda.html/result.parquet) are raw bytes,
+# often several MB (inline plotly.js alone is ~4MB - see packages/sandbox
+# notes in CLAUDE.md for why include_plotlyjs=True is non-negotiable).
+# `build_qa_graph()` is a real LangGraph StateGraph, so every node's full
+# state gets auto-traced as span input/output once Phase 7 observability is
+# on - a multi-MB value living in QAState for even one node (let alone the
+# several between execute and respond) is enough to blow past Phoenix's
+# OTLP gRPC receive limit and silently drop whole export batches, verified
+# live (see CLAUDE.md's "Observability" section - this is the same failure
+# class the orchestrator's artifact_ref/_artifact_sidecar exists for).
+# `_node_execute` stashes the real bytes here and puts only a small ref +
+# the key names (needed by `_node_verify`'s presence checks) into state;
+# `ask()` and orchestrator._extract_tool_result (run_route()'s caller) pop
+# the real bytes back out here, never through traced state.
+_artifact_sidecar: dict[str, dict[str, bytes]] = {}
 
 
 class QAState(TypedDict, total=False):
@@ -62,7 +82,8 @@ class QAState(TypedDict, total=False):
     previous_error: str | None
     attempt: int
     execution_result: dict | None
-    artifacts: dict[str, bytes]
+    artifact_ref: str | None
+    artifact_keys: list[str]
     chart_spec: dict | None
     chart_notes: list[str]
     needs_freehand_chart: bool
@@ -751,6 +772,38 @@ def _node_prepare_join_code(state: QAState) -> QAState:
     return state
 
 
+def _collect_pii_values(path: Path, pii_columns: set[str], cap: int = 5000) -> set[str]:
+    """Reads just the PII-flagged columns' actual values from the local
+    dataset file (host-side - this runs in the trusted API/agent process,
+    never inside the sandbox) so redact_pii_from_result can catch a leak
+    that carries no column name at all, e.g. `df["region"].unique().tolist()`
+    - a bare list of strings with nothing in the structure identifying which
+    column they came from. Verified live: without this, that exact pattern
+    let a PII-flagged column's raw values reach the final answer untouched;
+    see redact_pii_from_result's docstring for the by-name check this
+    complements. Capped so a high-cardinality PII column (free text, an
+    id-like field) can't make this scan itself expensive - a capped miss
+    just means that particular value isn't caught by the value-level check,
+    not that PII protection silently vanishes (the schema-text warning to
+    the code-gen LLM and the by-name check both still apply regardless).
+    """
+    if not pii_columns:
+        return set()
+    try:
+        table = pq.read_table(path, columns=list(pii_columns))
+    except Exception:
+        logger.warning("could not read PII columns from %s for redaction value-scan", path, exc_info=True)
+        return set()
+    values: set[str] = set()
+    for col in table.column_names:
+        for v in table.column(col).to_pylist():
+            if v is not None:
+                values.add(str(v))
+            if len(values) >= cap:
+                return values
+    return values
+
+
 def _node_execute(state: QAState) -> QAState:
     datasets = {state["dataset_name"]: Path(state["local_data_path"])}
     if state.get("right_dataset_name") and state.get("right_local_path"):
@@ -758,10 +811,49 @@ def _node_execute(state: QAState) -> QAState:
 
     timeout = EDA_TIMEOUT_SECONDS if state["route"] == "eda" else EXECUTION_TIMEOUT_SECONDS
     logger.info("executing code (attempt=%s, %d chars):\n%s", state.get("attempt"), len(state["code"] or ""), state["code"])
-    res = run_python(state["code"], datasets, timeout_seconds=timeout)
-    state["artifacts"] = res.artifacts
+
+    # sandbox.executor.run_python is a raw subprocess call, not a LangChain/
+    # LangGraph construct - LangChainInstrumentor never sees it, so it gets
+    # an explicit span here (see agent.tracing's module docstring for why
+    # this is the one node that needs manual instrumentation). No-ops via
+    # nullcontext when Phoenix is disabled, so this is never load-bearing.
+    tracer = get_tracer()
+    span_cm = tracer.start_as_current_span("sandbox.execute") if tracer is not None else nullcontext()
+    with span_cm as span:
+        res = run_python(state["code"], datasets, timeout_seconds=timeout)
+        if span is not None:
+            span.set_attribute("route", state["route"])
+            span.set_attribute("attempt", state.get("attempt", 0))
+            span.set_attribute("timeout_seconds", timeout)
+            span.set_attribute("success", res.error is None)
+            span.set_attribute("timed_out", bool(res.timed_out))
+            span.set_attribute("oom_killed", bool(res.oom_killed))
+            span.set_attribute("rejected", bool(res.rejected))
+            if res.error:
+                span.set_attribute("error", res.error)
+
+    # See _artifact_sidecar's module-level docstring for why the real bytes
+    # never go directly into traced state.
+    artifact_ref = uuid.uuid4().hex
+    _artifact_sidecar[artifact_ref] = res.artifacts or {}
+    state["artifact_ref"] = artifact_ref
+    state["artifact_keys"] = list((res.artifacts or {}).keys())
+
+    # Enforcement, not a prompt hint - see redact_pii_from_result's own
+    # docstring for why this can't just rely on the code-gen prompt's
+    # warning. A join can pull PII columns in from either side, so both
+    # datasets' flagged columns apply here, not just the primary one.
+    pii_columns = get_pii_column_names(state["dataset_id"])
+    pii_values = _collect_pii_values(Path(state["local_data_path"]), pii_columns)
+    if state.get("right_dataset_id"):
+        right_pii_columns = get_pii_column_names(state["right_dataset_id"])
+        pii_columns = pii_columns | right_pii_columns
+        if state.get("right_local_path"):
+            pii_values |= _collect_pii_values(Path(state["right_local_path"]), right_pii_columns)
+    result = redact_pii_from_result(res.result, pii_columns, pii_values)
+
     state["execution_result"] = {
-        "result": res.result,
+        "result": result,
         "error": res.error,
         "stdout": res.stdout,
         "stderr": res.stderr,
@@ -798,7 +890,7 @@ def _node_verify(state: QAState) -> QAState:
         return state
 
     if state["route"] == "chart":
-        if "chart.html" not in (state.get("artifacts") or {}):
+        if "chart.html" not in (state.get("artifact_keys") or []):
             state["verified"] = False
             # Actionable, not just descriptive - a generic "no artifact"
             # message left retries guessing at a cause (observed: the model
@@ -817,7 +909,7 @@ def _node_verify(state: QAState) -> QAState:
         return state
 
     if state["route"] == "eda":
-        if "eda.html" not in (state.get("artifacts") or {}):
+        if "eda.html" not in (state.get("artifact_keys") or []):
             state["verified"] = False
             state["verification_error"] = "The EDA code ran but did not produce a report."
             return state
@@ -826,7 +918,7 @@ def _node_verify(state: QAState) -> QAState:
         return state
 
     if state["route"] in ("transform", "join"):
-        if "result.parquet" not in (state.get("artifacts") or {}):
+        if "result.parquet" not in (state.get("artifact_keys") or []):
             state["verified"] = False
             state["verification_error"] = "The code ran but did not produce a result.parquet artifact."
             return state
@@ -887,7 +979,8 @@ def _node_finalize_transform(state: QAState) -> QAState:
     everywhere else in this codebase: agent graphs return data, apps/api
     services persist it).
     """
-    parquet_bytes = (state.get("artifacts") or {}).get("result.parquet")
+    artifacts = _artifact_sidecar.get(state.get("artifact_ref"), {})
+    parquet_bytes = artifacts.get("result.parquet")
     if not parquet_bytes:
         # Shouldn't happen - verify() already checked this before routing
         # here - but don't claim success if it somehow does.
@@ -1216,17 +1309,25 @@ def ask(dataset_ids: list[str], question: str, user_id: str, session_id: str) ->
     graph = build_qa_graph()
     logger.info("ask() start: user_id=%s session_id=%s dataset_ids=%s question=%r", user_id, session_id, dataset_ids, question)
     start = time.monotonic()
-    final_state: QAState = graph.invoke(
-        {
-            "dataset_ids": dataset_ids,
-            "question": question,
-            "user_id": user_id,
-            "session_id": session_id,
-            "attempt": 0,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-        }
-    )
+    # See agent.graphs.orchestrator.ask()'s identical wrapping for why this
+    # exists - without an explicit outer span, _node_execute's manual
+    # sandbox.execute span has no ambient parent to attach to and comes out
+    # as its own orphaned trace (verified live) instead of part of this
+    # question's trace.
+    tracer = get_tracer()
+    span_cm = tracer.start_as_current_span("qa.ask") if tracer is not None else nullcontext()
+    with span_cm:
+        final_state: QAState = graph.invoke(
+            {
+                "dataset_ids": dataset_ids,
+                "question": question,
+                "user_id": user_id,
+                "session_id": session_id,
+                "attempt": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+            }
+        )
     duration = time.monotonic() - start
 
     local_path = final_state.get("local_data_path")
@@ -1237,7 +1338,9 @@ def ask(dataset_ids: list[str], question: str, user_id: str, session_id: str) ->
         shutil.rmtree(Path(right_local_path).parent, ignore_errors=True)
 
     exec_result = final_state.get("execution_result") or {}
-    artifacts = final_state.get("artifacts") or {}
+    # Popped, not just read - see _artifact_sidecar's docstring; nothing
+    # else needs this entry once ask() has returned.
+    artifacts = _artifact_sidecar.pop(final_state.get("artifact_ref"), {})
     artifact_bytes = artifacts.get("chart.html") or artifacts.get("eda.html")
     effective_route = _effective_route(
         final_state.get("route", ""), final_state.get("code"), final_state.get("needs_freehand_chart", False)
