@@ -18,20 +18,27 @@ apps/api/        FastAPI backend (package name: api). `services/chat.py` +
                    versioned data (Phase 5) — kept as a separate service/route
                    pair from chat rather than folded in, since none of it goes
                    through the agent graph.
-apps/web/         React + Vite + TypeScript frontend - the only non-Python,
-                   non-uv part of this repo (own package.json, `npm install`/
-                   `npm run dev`/`npm run build` from apps/web, not uv). It is
-                   deliberately excluded from `[tool.uv.workspace]` in the
-                   root pyproject.toml (`exclude = ["apps/web"]"`) since it
-                   has no pyproject.toml and the workspace glob would
-                   otherwise error trying to match it. `vite.config.ts`
-                   proxies `/api/*` to `http://localhost:8000` in dev so the
-                   frontend never needs CORS config or a hardcoded backend
-                   origin - `src/api.ts` always calls relative `/api/...`
-                   paths. Talks only to the existing REST endpoints (chat,
-                   transforms, datasets) - no new backend surface was added
-                   for it, and it has no build step or dependency on
-                   anything under `packages/`.
+apps/web/         Next.js (App Router) + React + TypeScript frontend - the
+                   only non-Python, non-uv part of this repo (own
+                   package.json, `npm install`/`npm run dev`/`npm run build`
+                   from apps/web, not uv). Rewritten from a lightweight Vite
+                   SPA to this Next.js app after all core backend phases
+                   landed - see "Frontend rewrite" below for the full
+                   rationale and architecture; the "deliberately excluded
+                   from the uv workspace" reasoning is unchanged by the
+                   rewrite (`exclude = ["apps/web"]` in the root
+                   pyproject.toml, since it has no pyproject.toml and the
+                   workspace glob would otherwise error). `next.config.ts`'s
+                   `rewrites()` proxies `/api/*` to `http://localhost:8000`
+                   exactly like the old `vite.config.ts` dev proxy did, so
+                   the frontend never needs CORS config or a hardcoded
+                   backend origin - `src/lib/api/client.ts` always calls
+                   relative `/api/...` paths. Talks only to the existing
+                   REST endpoints (chat, transforms, datasets, users) - no
+                   new backend surface beyond the one small additive
+                   `GET /users/me` (see "Frontend rewrite" below) - and it
+                   has no build step or dependency on anything under
+                   `packages/`.
 apps/worker/      async job runner (added later)
 packages/core/     Settings, DB/S3/Redis/Chroma client factories, and the
                    catalog ORM models (Dataset/DatasetVersion/Column/User/
@@ -846,19 +853,97 @@ pre-existing rows again, do it explicitly (`UPDATE datasets SET
 uploaded_by_user_id = :uid WHERE uploaded_by_user_id IS NULL`), don't assume
 NULL should keep meaning "visible to all."
 
-## Frontend identity (apps/web)
+## Frontend rewrite: Next.js (App Router), replacing the Vite SPA
 
-No login flow - `apps/web/src/auth.ts` (`getCurrentUserId()`) is the single
-place identity is read from, sourced from `VITE_USER_ID` in
-`apps/web/.env.local` (gitignored, per-developer; `.env.example` is the
-template, mirroring the backend's `.env`/`.env.example` pattern). `App.tsx`
-renders a hard "Access denied" screen instead of the app when it's unset -
-never fall back to a default/anonymous id, since the entire point is that
-each teammate pulling this repo sets their own before they can use it. Vite
-only re-reads `.env.local` on dev-server restart, not hot-reload - changing
-it requires restarting `npm run dev`. When real auth eventually replaces
-this, `getCurrentUserId()` is the only function that needs to change; no
-component should read `import.meta.env.VITE_USER_ID` directly.
+The original `apps/web` was a deliberately lightweight Vite SPA built to
+unblock backend phases - no router, no component library, one prop-drilled
+`App.tsx`. Once PII/RBAC/observability (Phase 7) landed, it was rebuilt as
+a full Next.js app for an "enterprise-feeling" UI, **replacing `apps/web`
+in place** (old Vite files removed via `git rm`, fully recoverable from
+history, not kept alongside). Confirmed scope for this rewrite, so it
+doesn't get second-guessed later: **UI-only** - `POST /chat/ask` keeps its
+existing single blocking request/response contract (no SSE/streaming was
+added), and the only backend change at all was one small additive
+endpoint, `GET /users/me` (see below).
+
+- **Stack**: Next.js (App Router) + TypeScript, predominantly client
+  components (`"use client"` at the shell/page level) - this app has no
+  direct DB access and nothing to gain from RSC data-fetching against the
+  FastAPI backend, so Next.js is used for its routing/project conventions,
+  not server rendering of agent data. Tailwind CSS v4 + shadcn/ui (Radix
+  primitives, `components.json`, "Nova/Lucide/Geist" preset) for the
+  component layer, **TanStack Query** for all server state (datasets,
+  sessions, session history, versions - `src/hooks/*`), **Zustand**
+  (`src/store/chat-store.ts`) for the one real cross-cutting client state
+  (current session id, attached/selected dataset ids, the live message
+  list, which dataset the Data Explorer is focused on) - the prop-drilling
+  `App.tsx` used to do by hand. `next-themes` gives a real manual
+  light/dark toggle (the old app only had `prefers-color-scheme`);
+  `react-markdown`+`remark-gfm` render assistant text, `react-syntax-
+  highlighter` renders code blocks/generated code.
+- **Routing** (the actual reason to prefer Next.js over Vite here):
+  `/chat` (new-chat landing: dataset picker + prompt box), `/chat/
+  [sessionId]` (an active conversation - bookmarkable/shareable, loads via
+  `getSessionHistory`), `/datasets` (Data Explorer index: grid, upload),
+  `/datasets/[datasetId]` (Schema tab - full column profiles including PII
+  badges - and Versions tab, reusing the same version-timeline component
+  the old `VersionPanel` was). None of this changes dataset/session
+  visibility semantics - see "Dataset visibility" above, still
+  listing-scoped only, not real access control.
+- **Identity stays the exact same model, just ported**: still no real
+  auth. `src/lib/auth.ts`'s `getCurrentUserId()` is the single place
+  identity is read from, now sourced from `NEXT_PUBLIC_USER_ID` in
+  `apps/web/.env.local` (same gitignored-per-developer pattern,
+  `.env.example` is the template). The `(workspace)/layout.tsx` route
+  group renders a hard "Access denied" screen instead of the app when it's
+  unset - same behavior as the old `App.tsx`, deliberately NOT replaced
+  with an in-app identity switcher (a real option that was considered and
+  declined - the env-var gate was kept on purpose). When real auth
+  eventually replaces this, `getCurrentUserId()` is still the only
+  function that needs to change.
+- **One small additive backend endpoint**: `GET /users/me?user_id=...`
+  (`apps/api/src/api/routes/users.py`) returns `{external_id, role}` via
+  the existing `get_or_create_user` - added specifically because the old
+  UI had no way to show a user's viewer/editor role or pre-disable an
+  action they can't perform; before this, a viewer only found out via a
+  403 after clicking Confirm. `src/hooks/use-current-user.ts`'s
+  `useCurrentUserRole` wraps it and feeds `transform-card.tsx` (Confirm
+  disabled + tooltip for viewers, Reject always enabled - matching the
+  backend's actual gate exactly, see "Guardrails" above) and
+  `version-timeline.tsx`'s "Make active" button the same way. This
+  endpoint never mutates role - a brand-new `user_id` still comes back
+  `"viewer"`, same least-privilege default as everywhere else.
+- **Result rendering is shape-driven, not schema-driven**: `AskResponse
+  .result`/`ChatMessageRecord.result` is genuinely loose-typed on the
+  backend (the sandbox's `result` variable can be a scalar, list, dict, or
+  the dataframe-preview shape `{type:"dataframe", columns, preview}` - see
+  `tools/pii.py`). `components/chat/result-renderer.tsx` branches on shape
+  at runtime. It deliberately renders **nothing** for a bare scalar
+  result - `agent.graphs.qa`'s `_format_result` already made that exact
+  value the whole `answer` text for those routes, so a second copy would
+  just be redundant noise; only genuinely additional structured data
+  (a dataframe preview, a list of records, a multi-key dict) gets its own
+  table/list view.
+- **Visual identity carried over deliberately**, not reset to shadcn's
+  default neutral theme: the old app's purple accent (`#aa3bff` light /
+  `#c084fc` dark) and warm-gray surfaces from `index.css` were ported into
+  `globals.css`'s CSS-variable theme (old `--accent` → shadcn's
+  `--primary`; shadcn's own `--accent` token stays a subtle hover tint, a
+  different concept from the old app's brand-color `--accent`- don't
+  conflate the two if you touch this file).
+- **Corporate-proxy TLS note, Node side**: the same Zscaler TLS-
+  interception issue documented under "Package management" for `uv`
+  affects Node/npm tooling too, just with a different fix - `uv`'s
+  `system-certs = true` doesn't apply to Node. When a Node-based CLI
+  (`shadcn@latest`, etc.) fails with `unable to get local issuer
+  certificate`, prefix the command with `NODE_OPTIONS="--use-system-ca"`
+  (Node's own equivalent of trusting the OS certificate store) rather than
+  disabling TLS verification.
+- **`next.config.ts` sets `agentRules: false`**: Next.js 16 auto-generates
+  its own `AGENTS.md`/`CLAUDE.md` stub pair on dev-server start otherwise -
+  this repo's root `CLAUDE.md` is the single source of truth (see "Repo
+  layout" above), so a second, conflicting nested `CLAUDE.md` is
+  deliberately suppressed, not an oversight if you notice it's missing.
 
 ## Code style for this repo
 

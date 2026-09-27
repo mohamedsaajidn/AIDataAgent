@@ -1,0 +1,28 @@
+- generic [active] [ref=f64e1]:
+  - generic [ref=f64e2]:
+    - complementary [ref=f64e3]:
+      - generic [ref=f64e4]: VoiceAgent
+      - button "New chat" [ref=f64e10]
+      - navigation [ref=f64e11]:
+        - link "Data Explorer" [ref=f64e12] [cursor=pointer]:
+          - /url: /datasets
+      - paragraph [ref=f64e18]: Recent chats
+    - generic [ref=f64e26]:
+      - banner [ref=f64e27]:
+        - generic [ref=f64e28]:
+          - generic [ref=f64e29]: mohamed.saajid3@latentview.com
+          - button "Toggle theme" [ref=f64e30]
+      - main [ref=f64e31]:
+        - generic [ref=f64e32]:
+          - generic [ref=f64e33]:
+            - heading "Start a new chat" [level=1] [ref=f64e34]
+            - paragraph [ref=f64e35]: Select one or more datasets, then ask a question.
+          - generic [ref=f64e40]:
+            - generic [ref=f64e42]:
+              - textbox "Ask a question, request a transform/join/chart/EDA, or correct something…" [ref=f64e43]
+              - generic [ref=f64e44]:
+                - button "Attach a dataset" [ref=f64e45]
+                - button "Send" [disabled]
+            - paragraph [ref=f64e46]: Select at least one dataset, or attach a new one, to start a chat.
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f64e52] [cursor=pointer]

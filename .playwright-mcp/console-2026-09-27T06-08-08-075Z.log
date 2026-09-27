@@ -1,0 +1,19 @@
+[     122ms] [LOG] [Fast Refresh] done in 22ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_1e8vcs8._.js:776
+[     936ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_1e8vcs8._.js:776
+[    1595ms] [LOG] [HMR] connected @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_1e8vcs8._.js:776
+[  169732ms] TypeError: currentElement.hasAttribute is not a function
+    at isWithinResizeHandle (http://localhost:3000/_next/static/chunks/node_modules_0mrse2i._.js:21187:28)
+    at handlePointerUp (http://localhost:3000/_next/static/chunks/node_modules_0mrse2i._.js:21171:14)
+    at eval (eval at <anonymous> (eval at evaluate (:367:30)), <anonymous>:2:10)
+    at eval (eval at evaluate (:367:30), <anonymous>:4:50)
+    at UtilityScript.evaluate (<anonymous>:369:16)
+    at UtilityScript.<anonymous> (<anonymous>:1:44)
+[  169732ms] TypeError: currentElement.hasAttribute is not a function
+    at isWithinResizeHandle (http://localhost:3000/_next/static/chunks/node_modules_0mrse2i._.js:21187:28)
+    at handlePointerUp (http://localhost:3000/_next/static/chunks/node_modules_0mrse2i._.js:21171:14)
+    at eval (eval at <anonymous> (eval at evaluate (:367:30)), <anonymous>:3:12)
+    at eval (eval at evaluate (:367:30), <anonymous>:4:50)
+    at UtilityScript.evaluate (<anonymous>:369:16)
+    at UtilityScript.<anonymous> (<anonymous>:1:44)
+[  169973ms] [LOG] [Fast Refresh] rebuilding @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_1e8vcs8._.js:776
+[  170815ms] [LOG] [Fast Refresh] done in 950ms @ http://localhost:3000/_next/static/chunks/node_modules_next_dist_1e8vcs8._.js:776

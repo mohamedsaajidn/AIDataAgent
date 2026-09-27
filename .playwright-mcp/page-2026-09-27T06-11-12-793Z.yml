@@ -1,0 +1,33 @@
+- generic [active] [ref=f76e1]:
+  - generic [ref=f76e2]:
+    - complementary [ref=f76e3]:
+      - generic [ref=f76e4]:
+        - generic [ref=f76e5]: DataAgent
+        - button "Collapse sidebar" [ref=f76e10]
+      - button "New chat" [ref=f76e12]
+      - navigation [ref=f76e13]:
+        - link "Data Explorer" [ref=f76e14] [cursor=pointer]:
+          - /url: /datasets
+      - paragraph [ref=f76e20]: Recent chats
+    - generic [ref=f76e28]:
+      - banner [ref=f76e29]:
+        - generic [ref=f76e30]:
+          - generic [ref=f76e31]: mohamed.saajid3@latentview.com
+          - button "Toggle theme" [ref=f76e32]
+      - main [ref=f76e33]:
+        - generic [ref=f76e34]:
+          - generic [ref=f76e58]:
+            - textbox "Ask a question, request a transform/join/chart/EDA, or correct something…" [ref=f76e59]
+            - generic [ref=f76e60]:
+              - button "Attach a dataset" [ref=f76e61]
+              - button "Send" [disabled]
+          - separator [ref=f76e62]
+          - generic [ref=f76e72]:
+            - generic [ref=f76e73]:
+              - paragraph [ref=f76e75]: Versions
+              - button "Collapse versions" [ref=f76e76]
+            - generic [ref=f76e79]:
+              - paragraph [ref=f76e84]: No dataset resolved yet
+              - paragraph [ref=f76e85]: Ask a question to see this dataset's version history here.
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f76e91] [cursor=pointer]

@@ -1,0 +1,18 @@
+- generic [active] [ref=f11e1]:
+  - generic [ref=f11e2]:
+    - complementary [ref=f11e3]:
+      - generic [ref=f11e4]: VoiceAgent
+      - button "New chat" [ref=f11e10]
+      - navigation [ref=f11e11]:
+        - link "Data Explorer" [ref=f11e12] [cursor=pointer]:
+          - /url: /datasets
+      - paragraph [ref=f11e18]: Recent chats
+    - generic [ref=f11e26]:
+      - banner [ref=f11e27]:
+        - generic [ref=f11e28]:
+          - generic [ref=f11e29]: mohamed.saajid3@latentview.com
+          - button "Toggle theme" [ref=f11e30]
+      - main [ref=f11e31]:
+        - generic [ref=f11e32]: Loading conversation…
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f11e38] [cursor=pointer]

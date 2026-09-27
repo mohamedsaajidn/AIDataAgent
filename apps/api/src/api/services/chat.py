@@ -13,6 +13,18 @@ from core.db import get_session
 from core.models import ChatMessage, ChatSession, ChatSessionDataset, PendingTransform
 
 
+def _pending_transform_diff(p: PendingTransform) -> dict:
+    return {
+        "columns_added": p.columns_added,
+        "columns_removed": p.columns_removed,
+        "row_count_before": p.row_count_before,
+        "row_count_after": p.row_count_after,
+        "column_count_before": p.column_count_before,
+        "column_count_after": p.column_count_after,
+        "summary": p.diff_summary,
+    }
+
+
 def ask_question(
     dataset_ids: list[str],
     question: str,
@@ -137,11 +149,25 @@ def get_session_history(session_id: str) -> dict:
         )
         if chat_session is None:
             raise ValueError(f"No chat session found with id {session_id}")
-        return {
-            "session_id": str(chat_session.id),
-            "dataset_ids": [str(link.dataset_id) for link in chat_session.dataset_links],
-            "user_id": str(chat_session.user_id) if chat_session.user_id else None,
-            "messages": [
+
+        # A message's diff/status only lives on PendingTransform (see its
+        # model docstring) - without re-attaching it here, reloading a
+        # session (a hard refresh, or just revisiting it later) silently
+        # dropped the Confirm/Reject card for a still-pending transform,
+        # with no other way in the UI to act on it. Batched into one query
+        # rather than N+1 per message.
+        pending_ids = {m.pending_transform_id for m in chat_session.messages if m.pending_transform_id}
+        pending_by_id: dict[uuid.UUID, PendingTransform] = {}
+        if pending_ids:
+            pendings = session.scalars(
+                select(PendingTransform).where(PendingTransform.id.in_(pending_ids))
+            ).all()
+            pending_by_id = {p.id: p for p in pendings}
+
+        messages = []
+        for m in chat_session.messages:
+            pending = pending_by_id.get(m.pending_transform_id) if m.pending_transform_id else None
+            messages.append(
                 {
                     "role": m.role,
                     "content": m.content,
@@ -155,10 +181,17 @@ def get_session_history(session_id: str) -> dict:
                     "attempts": m.attempts,
                     "artifact_html": m.artifact_html,
                     "pending_transform_id": str(m.pending_transform_id) if m.pending_transform_id else None,
+                    "diff": _pending_transform_diff(pending) if pending else None,
+                    "pending_transform_status": pending.status if pending else None,
                     "created_at": m.created_at.isoformat() if m.created_at else None,
                 }
-                for m in chat_session.messages
-            ],
+            )
+
+        return {
+            "session_id": str(chat_session.id),
+            "dataset_ids": [str(link.dataset_id) for link in chat_session.dataset_links],
+            "user_id": str(chat_session.user_id) if chat_session.user_id else None,
+            "messages": messages,
         }
 
 

@@ -1,0 +1,84 @@
+- generic [active] [ref=f18e1]:
+  - generic [ref=f18e2]:
+    - complementary [ref=f18e3]:
+      - generic [ref=f18e4]: VoiceAgent
+      - button "New chat" [ref=f18e10]
+      - navigation [ref=f18e11]:
+        - link "Data Explorer" [ref=f18e12] [cursor=pointer]:
+          - /url: /datasets
+      - generic [ref=f18e17]:
+        - paragraph [ref=f18e18]: Recent chats
+        - list [ref=f18e54]:
+          - listitem [ref=f18e55]:
+            - link [ref=f18e56] [cursor=pointer]:
+              - /url: /chat/cb891ae0-d8ff-4195-a4ac-356e71eee434
+              - paragraph [ref=f18e57]: Drop the HDI column
+              - paragraph [ref=f18e58]: country_stats_NEW
+              - paragraph [ref=f18e59]: 6 messages · 9/26/2026, 12:50:00 PM
+          - listitem [ref=f18e60]:
+            - link [ref=f18e61] [cursor=pointer]:
+              - /url: /chat/86e25848-d248-482d-bda2-0f8382514628
+              - paragraph [ref=f18e62]: Drop the loan_grade column
+              - paragraph [ref=f18e63]: credit_risk_dataset
+              - paragraph [ref=f18e64]: 4 messages · 9/26/2026, 11:09:59 AM
+          - listitem [ref=f18e65]:
+            - link [ref=f18e66] [cursor=pointer]:
+              - /url: /chat/bf320095-452d-4e2a-b7c1-64b66c30d4b9
+              - paragraph [ref=f18e67]: again do a hypothesis testing and confirm if there is any relationship between loan intent and loan defaults.
+              - paragraph [ref=f18e68]: credit_risk_dataset
+              - paragraph [ref=f18e69]: 62 messages · 9/25/2026, 3:31:23 PM
+          - listitem [ref=f18e70]:
+            - link [ref=f18e71] [cursor=pointer]:
+              - /url: /chat/2156ecfc-c578-4097-acc1-bad521009bc4
+              - paragraph [ref=f18e72]: "Can we predict a country's population density using its total population, land area, Human Development Index (HDI), and fertility rate by building and evaluating a Linear Regression model? The model should: Use Population, Land in km2, HDI, and Fertility rate as predictor variables. Split the dataset into 80% training and 20% testing data. Train a Linear Regression model. Evaluate the model using Mean Squared Error (MSE) and R² score. Visualize actual versus predicted population density using a scatter plot."
+              - paragraph [ref=f18e73]: country_stats_NEW
+              - paragraph [ref=f18e74]: 12 messages · 9/25/2026, 3:20:42 PM
+          - listitem [ref=f18e75]:
+            - link [ref=f18e76] [cursor=pointer]:
+              - /url: /chat/165e53fc-0928-4e5b-8cbf-75406f2b782d
+              - paragraph [ref=f18e77]: provide the summary of the data
+              - paragraph [ref=f18e78]: country_stats_NEW
+              - paragraph [ref=f18e79]: 1 messages · 9/24/2026, 7:57:38 PM
+          - listitem [ref=f18e80]:
+            - link [ref=f18e81] [cursor=pointer]:
+              - /url: /chat/55af7f6a-daba-4d9d-bbb3-f7a9298b146d
+              - paragraph [ref=f18e82]: provide the summary of the data
+              - paragraph [ref=f18e83]: country_stats_NEW
+              - paragraph [ref=f18e84]: 1 messages · 9/24/2026, 7:55:33 PM
+    - generic [ref=f18e26]:
+      - banner [ref=f18e27]:
+        - generic [ref=f18e28]:
+          - generic [ref=f18e85]: Editor
+          - generic [ref=f18e29]: mohamed.saajid3@latentview.com
+          - button "Toggle theme" [ref=f18e30]
+      - main [ref=f18e31]:
+        - generic [ref=f18e32]:
+          - generic [ref=f18e33]:
+            - heading "Start a new chat" [level=1] [ref=f18e34]
+            - paragraph [ref=f18e35]: Select one or more datasets, then ask a question.
+          - list [ref=f18e86]:
+            - listitem [ref=f18e87]:
+              - generic [ref=f18e88] [cursor=pointer]:
+                - checkbox "country_stats_NEW 179 rows × 12 cols" [ref=f18e89]
+                - generic [ref=f18e90]:
+                  - paragraph [ref=f18e91]: country_stats_NEW
+                  - paragraph [ref=f18e92]: 179 rows × 12 cols
+            - listitem [ref=f18e93]:
+              - generic [ref=f18e94] [cursor=pointer]:
+                - checkbox "survey 726 rows × 85 cols" [checked] [ref=f18e95]
+                - generic [ref=f18e96]:
+                  - paragraph [ref=f18e97]: survey
+                  - paragraph [ref=f18e98]: 726 rows × 85 cols
+            - listitem [ref=f18e99]:
+              - generic [ref=f18e100] [cursor=pointer]:
+                - checkbox "credit_risk_dataset 26,032 rows × 13 cols" [ref=f18e101]
+                - generic [ref=f18e102]:
+                  - paragraph [ref=f18e103]: credit_risk_dataset
+                  - paragraph [ref=f18e104]: 26,032 rows × 13 cols
+          - generic [ref=f18e41]:
+            - button "Attach a dataset" [disabled]
+            - textbox "Ask a question, request a transform/join/chart/EDA, or correct something…" [disabled] [ref=f18e43]
+            - button "Send" [disabled]
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=f18e50] [cursor=pointer]
+  - alert [ref=f18e105]
