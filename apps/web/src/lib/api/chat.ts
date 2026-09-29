@@ -1,4 +1,4 @@
-import { request } from "./client";
+import { request, requestText } from "./client";
 import type { AskRequest, AskResponse, SessionHistoryResponse, SessionSummary } from "@/lib/types/api";
 
 export function askQuestion(params: {
@@ -24,4 +24,8 @@ export function listSessions(userId: string): Promise<{ sessions: SessionSummary
 
 export function getSessionHistory(sessionId: string): Promise<SessionHistoryResponse> {
   return request(`/chat/sessions/${sessionId}`);
+}
+
+export function getMessageArtifact(messageId: string): Promise<string> {
+  return requestText(`/chat/messages/${messageId}/artifact`);
 }

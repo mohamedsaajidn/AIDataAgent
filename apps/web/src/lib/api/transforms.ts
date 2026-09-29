@@ -1,5 +1,5 @@
 import { request } from "./client";
-import type { VersionSummary, VersionsResponse } from "@/lib/types/api";
+import type { DatasetSampleResponse, VersionSummary, VersionsResponse } from "@/lib/types/api";
 
 /** RBAC-gated - requires the editor role server-side. `userId` is a
  * required query param (not a header/body field) to match the backend's
@@ -18,6 +18,10 @@ export function rejectTransform(pendingId: string): Promise<{ id: string; status
 
 export function listVersions(datasetId: string): Promise<VersionsResponse> {
   return request(`/datasets/${datasetId}/versions`);
+}
+
+export function getDatasetSample(datasetId: string, limit = 30): Promise<DatasetSampleResponse> {
+  return request(`/datasets/${datasetId}/sample?${new URLSearchParams({ limit: String(limit) })}`);
 }
 
 /** RBAC-gated (editor only) - same query-param pattern as confirm. */

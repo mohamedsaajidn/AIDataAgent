@@ -44,6 +44,17 @@ export async function requestBlob(path: string): Promise<Blob> {
   return res.blob();
 }
 
+/** For the chart/EDA artifact endpoint - raw HTML, not JSON (fetched
+ * on-demand per message rather than inlined into every chat response, see
+ * lib/types/api.ts's AskResponse.has_artifact doc comment for why). */
+export async function requestText(path: string): Promise<string> {
+  const res = await fetch(`${BASE}${path}`);
+  if (!res.ok) {
+    throw new ApiError(await parseErrorDetail(res), res.status);
+  }
+  return res.text();
+}
+
 export function apiUrl(path: string): string {
   return `${BASE}${path}`;
 }

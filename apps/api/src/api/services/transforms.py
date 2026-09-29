@@ -1,4 +1,5 @@
 import io
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -9,7 +10,7 @@ from core.db import get_session
 from core.models import Column, Dataset, DatasetVersion, PendingTransform
 from core.settings import get_settings
 from core.storage import get_s3_client
-from tools.pii import scan_column
+from tools.pii import redact_pii_from_result, scan_column
 from tools.profiler import coerce_types, profile_dataframe
 
 try:
@@ -212,6 +213,68 @@ def list_versions(dataset_id: str) -> dict:
             "active_version_id": str(dataset.active_version_id) if dataset.active_version_id else None,
             "versions": [_version_summary(v) for v in versions],
         }
+
+
+def get_dataset_sample(dataset_id: str, version_id: str | None, limit: int) -> dict:
+    """A direct, LLM-free row preview for the Data Explorer - "let me look at
+    the actual data before I ask anything" doesn't need a chat round-trip.
+    Defaults to the active version, same optional-version_id pattern as
+    export_version.
+
+    PII columns are redacted server-side via the same tools.pii.
+    redact_pii_from_result the agent path uses on every route (see CLAUDE.md's
+    "Guardrails: PII enforcement" - a redaction chokepoint, not a
+    frontend-only hiding convention) rather than trusting the frontend to
+    correctly hide something it was already sent.
+    """
+    settings = get_settings()
+    s3 = get_s3_client()
+
+    with get_session() as session:
+        dataset = session.get(Dataset, uuid.UUID(dataset_id))
+        if dataset is None:
+            raise VersionNotFound(f"No dataset found with id {dataset_id}")
+        target_id = uuid.UUID(version_id) if version_id else dataset.active_version_id
+        if target_id is None:
+            raise VersionNotFound(f"Dataset {dataset_id} has no active version")
+        version = session.get(DatasetVersion, target_id)
+        if version is None or version.dataset_id != dataset.id:
+            raise VersionNotFound(f"No version {version_id} found for dataset {dataset_id}")
+        parquet_key = version.parquet_key
+        version_number = version.version_number
+        row_count = version.row_count
+        columns = session.scalars(
+            select(Column).where(Column.dataset_version_id == target_id).order_by(Column.position)
+        ).all()
+        column_order = [c.name for c in columns]
+        pii_columns = {c.name for c in columns if c.is_pii}
+
+    obj = s3.get_object(Bucket=settings.s3_bucket, Key=parquet_key)
+    parquet_bytes = obj["Body"].read()
+    df = pd.read_parquet(io.BytesIO(parquet_bytes))
+    sample_df = df.head(limit)
+
+    # Same dataframe-preview shape (and the same pandas-native to_json
+    # round-trip for numpy/NaN/Timestamp-safe JSON values) the sandbox
+    # runner already uses for a dataframe result - redact_pii_from_result
+    # recognizes this exact shape and filters both "columns" and each
+    # "preview" row.
+    preview = {
+        "type": "dataframe",
+        "columns": column_order,
+        "preview": json.loads(sample_df.to_json(orient="records")),
+    }
+    redacted = redact_pii_from_result(preview, pii_columns)
+
+    return {
+        "version_id": str(target_id),
+        "version_number": version_number,
+        "row_count": row_count,
+        "sample_row_count": len(sample_df),
+        "columns": redacted["columns"],
+        "pii_columns": sorted(pii_columns),
+        "rows": redacted["preview"],
+    }
 
 
 def set_active_version(dataset_id: str, version_id: str) -> dict:

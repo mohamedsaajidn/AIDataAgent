@@ -4,7 +4,7 @@ import { AlertTriangle } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { ArtifactFrame } from "@/components/chat/artifact-frame";
+import { LazyArtifact } from "@/components/chat/lazy-artifact";
 import { ResultRenderer, resultRendersAsTable } from "@/components/chat/result-renderer";
 import { TransformCard } from "@/components/chat/transform-card";
 import { CollapsibleCode } from "@/components/common/collapsible-code";
@@ -78,7 +78,7 @@ export function MessageBubble({ message, userId }: { message: DisplayMessage; us
 
         {message.code && <CollapsibleCode code={message.code} />}
 
-        {message.artifactHtml && <ArtifactFrame html={message.artifactHtml} />}
+        <LazyArtifact messageId={message.id} hasArtifact={message.hasArtifact} />
 
         {message.pendingTransformId && message.diff && (
           <TransformCard

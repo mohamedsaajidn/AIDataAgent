@@ -74,6 +74,9 @@ export interface AskRequest {
 
 export interface AskResponse {
   session_id: string;
+  /** The newly-created assistant message's id - use with
+   * GET /chat/messages/{message_id}/artifact when has_artifact is true. */
+  message_id: string;
   user_id: string;
   dataset_ids: string[];
   resolved_dataset_id: string | null;
@@ -86,7 +89,14 @@ export interface AskResponse {
   prompt_tokens: number;
   completion_tokens: number;
   attempts: number;
-  artifact_html: string | null;
+  /** Whether this message has a chart/EDA artifact - fetched separately via
+   * GET /chat/messages/{message_id}/artifact rather than inlined here.
+   * A chart/EDA artifact is several MB (10+MB for a multi-chart turn) -
+   * inlining it in every response referencing the message doesn't scale,
+   * confirmed live: one real 40-message chart-heavy session's full history
+   * alone measured 84MB, which is the likely cause of intermittent
+   * failures specifically on chart-generating turns. */
+  has_artifact: boolean;
   diff: DiffSummary | null;
   pending_transform_id: string | null;
   remembered_fact: string | null;
@@ -95,6 +105,9 @@ export interface AskResponse {
 export type PendingTransformStatus = "pending" | "confirmed" | "rejected";
 
 export interface ChatMessageRecord {
+  /** Needed to fetch this message's artifact on demand - see
+   * AskResponse.has_artifact's doc comment. */
+  id: string;
   role: "user" | "assistant";
   content: string;
   route: ChatRoute | null;
@@ -105,7 +118,7 @@ export interface ChatMessageRecord {
   prompt_tokens: number | null;
   completion_tokens: number | null;
   attempts: number | null;
-  artifact_html: string | null;
+  has_artifact: boolean;
   pending_transform_id: string | null;
   diff: DiffSummary | null;
   pending_transform_status: PendingTransformStatus | null;
@@ -146,6 +159,19 @@ export interface VersionSummary {
 export interface VersionsResponse {
   active_version_id: string | null;
   versions: VersionSummary[];
+}
+
+export interface DatasetSampleResponse {
+  version_id: string;
+  version_number: number;
+  row_count: number;
+  sample_row_count: number;
+  columns: string[];
+  /** Columns dropped from `columns`/`rows` server-side - see
+   * api.services.transforms.get_dataset_sample's docstring on why this is
+   * real redaction, not just a frontend hiding convention. */
+  pii_columns: string[];
+  rows: Record<string, unknown>[];
 }
 
 export type ExportFormat = "csv" | "xlsx" | "parquet";

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { askQuestion, getSessionHistory, listSessions } from "@/lib/api/chat";
+import { askQuestion, getMessageArtifact, getSessionHistory, listSessions } from "@/lib/api/chat";
 import { useChatStore } from "@/store/chat-store";
 
 export function useSessions(userId: string) {
@@ -17,6 +17,20 @@ export function useSessionHistory(sessionId: string | null) {
     queryKey: ["session-history", sessionId],
     queryFn: () => getSessionHistory(sessionId as string),
     enabled: !!sessionId,
+  });
+}
+
+/** A chart/EDA artifact is fetched on its own, only for a message that
+ * actually has one - see AskResponse.has_artifact's doc comment for why
+ * this isn't inlined into the message itself. Cached per messageId, so
+ * re-rendering (or briefly scrolling a message out of view and back) never
+ * re-fetches a multi-MB artifact it already has. */
+export function useMessageArtifact(messageId: string | null | undefined, hasArtifact: boolean | undefined) {
+  return useQuery({
+    queryKey: ["artifact", messageId],
+    queryFn: () => getMessageArtifact(messageId as string),
+    enabled: !!messageId && !!hasArtifact,
+    staleTime: Infinity,
   });
 }
 

@@ -35,6 +35,7 @@ side-by-side comparison against the default qa.py graph before any cutover.
 """
 
 import logging
+import re
 import shutil
 import time
 import uuid
@@ -121,6 +122,12 @@ class OrchestratorState(TypedDict, total=False):
     code: str | None
     result: object
     artifact_ref: str | None
+    # Every chart.html ref from a make_chart call this turn, in call order -
+    # see _tool_make_chart's docstring. artifact_ref above still gets
+    # overwritten to "whichever chart came back last" like every other
+    # per-tool-call field here, which is exactly the bug this list exists to
+    # work around for charts specifically.
+    chart_artifact_refs: list[str]
     diff: dict | None
     pending_parquet_key: str | None
     join_spec: dict | None
@@ -143,6 +150,14 @@ one in the same turn only if it genuinely needs both. query_data can already att
 alongside a computed answer in one call (e.g. "train a model and show a scatter of results"), so
 don't call make_chart separately for that - only call make_chart when no new computation is needed
 first, just a plot of columns as they already exist.
+
+Each make_chart call can only ever produce ONE chart. If the question asks for a SEPARATE chart per
+column (e.g. "create count plots for Geography and Gender, split by Exited"), call make_chart once
+per chart, each time with a standalone sub-question naming exactly one column (e.g. "count plot of
+Geography, split by Exited" and separately "count plot of Gender, split by Exited") - never bundle
+two requested charts into one make_chart call's question, since that call can still only return one
+chart. Every chart you actually get back this way is shown to the user - describe all of them in
+your final answer, never more and never fewer than you actually called make_chart for.
 
 For anything that ISN'T a request to compute/chart/profile/modify the dataset - explaining or
 interpreting a result already visible in this conversation, a short reply like "yes"/"sure"
@@ -280,7 +295,22 @@ def _tool_query_data(state: OrchestratorState, question: str) -> tuple[str, dict
 
 
 def _tool_make_chart(state: OrchestratorState, question: str) -> tuple[str, dict]:
-    return _extract_tool_result("chart", run_route("chart", _build_sub_state(state, question)))
+    text, updates = _extract_tool_result("chart", run_route("chart", _build_sub_state(state, question)))
+    ref = updates.get("artifact_ref")
+    if ref:
+        # A turn that calls make_chart more than once (e.g. "plot Geography
+        # and also plot Gender") used to silently keep only the LAST chart -
+        # every field _extract_tool_result returns, artifact_ref included,
+        # gets assigned straight over the previous value by _node_run_tools'
+        # generic update loop below, with no error and no indication
+        # anything was dropped. Confirmed live: the final answer text
+        # described two charts while only the second's code/artifact
+        # actually survived. Accumulated here (read-then-append against the
+        # CURRENT state, before this call's own update is applied) so ask()
+        # can combine every chart from this turn into one artifact instead
+        # of losing all but the last.
+        updates["chart_artifact_refs"] = [*state.get("chart_artifact_refs", []), ref]
+    return text, updates
 
 
 def _tool_run_eda(state: OrchestratorState) -> tuple[str, dict]:
@@ -302,6 +332,42 @@ _TOOL_DISPATCH = {
     "propose_transform": _tool_propose_transform,
     "propose_join": _tool_propose_join,
 }
+
+
+_BODY_RE = re.compile(r"<body[^>]*>(.*)</body>", re.S | re.I)
+
+
+def _extract_chart_body(html: str) -> str:
+    """Pulls just a chart's own rendered content (its inline plotly.js copy
+    + its plot div/script) out of the full standalone document
+    fig.write_html(..., include_plotlyjs=True) produces. Each chart embeds
+    its own plotly.js inside <body> (see CLAUDE.md's sandbox notes on why
+    include_plotlyjs is always True, never "cdn"), so the extracted
+    fragment is fully self-contained - nothing from the original <head> is
+    needed to render it standalone inside a shared wrapper page."""
+    match = _BODY_RE.search(html)
+    return match.group(1) if match else html
+
+
+def _combine_chart_htmls(htmls: list[str]) -> str:
+    """Stacks multiple chart.html artifacts produced in the same turn into
+    one combined page - see _tool_make_chart's docstring for the bug this
+    fixes. Each section gets a fair, flexible share of the page's height
+    (a real chart embeds height:100%/width:100% on its own root div, which
+    then correctly fills whatever finite-height container it's placed in -
+    this wrapper is what supplies that, instead of the raw 100% resolving
+    against nothing)."""
+    sections = "".join(f'<div class="chart-section">{_extract_chart_body(h)}</div>' for h in htmls)
+    return (
+        "<!doctype html><html><head><meta charset=\"utf-8\" />"
+        "<style>"
+        "html, body { margin: 0; height: 100%; }"
+        "body { display: flex; flex-direction: column; gap: 12px; padding: 8px; "
+        "box-sizing: border-box; overflow-y: auto; }"
+        ".chart-section { flex: 1 1 0; min-height: 320px; border: 1px solid #e5e7eb; "
+        "border-radius: 8px; overflow: hidden; }"
+        "</style></head><body>" + sections + "</body></html>"
+    )
 
 
 def _node_orchestrator(state: OrchestratorState) -> OrchestratorState:
@@ -456,9 +522,22 @@ def ask(dataset_ids: list[str], question: str, user_id: str, session_id: str) ->
     # Resolved outside the graph (never traced) and popped immediately -
     # see _artifact_sidecar's docstring for why this can't just be a state
     # field like everything else here.
-    artifact_ref = final_state.get("artifact_ref")
-    artifact_bytes = _artifact_sidecar.pop(artifact_ref, None) if artifact_ref else None
-    artifact_html = artifact_bytes.decode("utf-8") if isinstance(artifact_bytes, bytes) else artifact_bytes
+    chart_refs = final_state.get("chart_artifact_refs") or []
+    if len(chart_refs) > 1:
+        # More than one make_chart call this turn - combine every chart
+        # into one artifact instead of the single artifact_ref field, which
+        # only ever holds the LAST one (see _tool_make_chart's docstring).
+        chart_htmls = []
+        for ref in chart_refs:
+            raw = _artifact_sidecar.pop(ref, None)
+            if raw is None:
+                continue
+            chart_htmls.append(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+        artifact_html = _combine_chart_htmls(chart_htmls) if chart_htmls else None
+    else:
+        artifact_ref = final_state.get("artifact_ref")
+        artifact_bytes = _artifact_sidecar.pop(artifact_ref, None) if artifact_ref else None
+        artifact_html = artifact_bytes.decode("utf-8") if isinstance(artifact_bytes, bytes) else artifact_bytes
 
     log = logger.warning if final_error else logger.info
     log(

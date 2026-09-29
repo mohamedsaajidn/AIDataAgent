@@ -7,6 +7,7 @@ import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DataSampleTable } from "@/components/datasets/data-sample-table";
 import { SchemaTable } from "@/components/datasets/schema-table";
 import { VersionTimeline } from "@/components/datasets/version-timeline";
 import { useDataset } from "@/hooks/use-datasets";
@@ -56,10 +57,14 @@ export default function DatasetDetailPage() {
       <Tabs defaultValue="schema">
         <TabsList>
           <TabsTrigger value="schema">Schema</TabsTrigger>
+          <TabsTrigger value="sample">Data Sample</TabsTrigger>
           <TabsTrigger value="versions">Versions</TabsTrigger>
         </TabsList>
         <TabsContent value="schema" className="pt-4">
           <SchemaTable columns={dataset.columns} />
+        </TabsContent>
+        <TabsContent value="sample" className="pt-4">
+          <DataSampleTable datasetId={datasetId} />
         </TabsContent>
         <TabsContent value="versions" className="pt-4">
           <VersionTimeline datasetId={datasetId} userId={userId} />

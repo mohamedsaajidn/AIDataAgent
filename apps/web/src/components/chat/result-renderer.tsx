@@ -1,4 +1,5 @@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatCell } from "@/lib/utils";
 import type { AskResult, DataframeResult } from "@/lib/types/api";
 
 function isDataframeResult(value: unknown): value is DataframeResult {
@@ -29,12 +30,6 @@ function isDictOfDicts(value: unknown): value is Record<string, Record<string, u
   if (!isPlainObject(value)) return false;
   const entries = Object.values(value);
   return entries.length > 0 && entries.every((v) => isPlainObject(v));
-}
-
-function formatCell(value: unknown): string {
-  if (value === null || value === undefined) return "—";
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
 }
 
 /** Whether `ResultRenderer` will show `result` as an actual table (as

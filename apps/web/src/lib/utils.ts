@@ -17,6 +17,15 @@ export function formatNumber(value: number | null): string {
   return value.toLocaleString();
 }
 
+/** Renders one table cell's raw value as display text - shared by
+ * ResultRenderer and the Data Explorer's sample table, both of which show
+ * whatever loosely-typed row data the backend hands them. */
+export function formatCell(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
 /** Removes GFM pipe-table blocks from markdown text. Used when a message's
  * structured `result` already renders as a real, properly-scrollable table
  * (see result-renderer.tsx's resultRendersAsTable) - the LLM's own prose

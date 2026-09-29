@@ -32,12 +32,13 @@ interface ChatState {
 
 function fromHistory(m: ChatMessageRecord): DisplayMessage {
   return {
+    id: m.id,
     role: m.role,
     content: m.content,
     route: m.route,
     code: m.code,
     result: m.result,
-    artifactHtml: m.artifact_html,
+    hasArtifact: m.has_artifact,
     diff: m.diff,
     pendingTransformId: m.pending_transform_id,
     pendingTransformStatus: m.pending_transform_status,
@@ -48,12 +49,13 @@ function fromHistory(m: ChatMessageRecord): DisplayMessage {
 
 function fromAskResponse(res: AskResponse): DisplayMessage {
   return {
+    id: res.message_id,
     role: "assistant",
     content: res.answer,
     route: res.route,
     code: res.code,
     result: res.result,
-    artifactHtml: res.artifact_html,
+    hasArtifact: res.has_artifact,
     diff: res.diff,
     pendingTransformId: res.pending_transform_id,
     rememberedFact: res.remembered_fact,

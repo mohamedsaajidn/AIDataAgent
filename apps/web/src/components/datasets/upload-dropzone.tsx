@@ -14,10 +14,18 @@ export function UploadDropzone({ userId }: { userId: string }) {
 
   async function uploadFiles(files: FileList | File[]) {
     for (const file of Array.from(files)) {
+      // Updated in place to success/error via the same id - a loading toast
+      // per file so a multi-file upload gives per-file confirmation, not
+      // just the dropzone's single "Uploading…" label swap covering the
+      // whole batch.
+      const toastId = toast.loading(`Uploading ${file.name}…`);
       try {
         await uploadMutation.mutateAsync(file);
+        toast.success(`${file.name} uploaded.`, { id: toastId });
       } catch (err) {
-        toast.error(`Failed to upload ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
+        toast.error(`Failed to upload ${file.name}: ${err instanceof Error ? err.message : String(err)}`, {
+          id: toastId,
+        });
       }
     }
     if (inputRef.current) inputRef.current.value = "";

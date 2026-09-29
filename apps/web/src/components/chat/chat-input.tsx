@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUp, Paperclip } from "lucide-react";
+import { ArrowUp, Loader2, Paperclip } from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -45,11 +45,21 @@ export function ChatInput({
   async function handleFiles(files: FileList) {
     const newIds: string[] = [];
     for (const file of Array.from(files)) {
+      // A loading toast (updated in place to success/error via the same id)
+      // is the only feedback here besides the attach button's own spinner -
+      // without it, an upload that takes more than an instant looked
+      // completely inert: no visual change until the dataset silently
+      // appeared, ticked, in the picker below, which read as "nothing
+      // happened" and invited re-clicking the button mid-upload.
+      const toastId = toast.loading(`Uploading ${file.name}…`);
       try {
         const res = await uploadMutation.mutateAsync(file);
         newIds.push(...res.datasets.map((d) => d.id));
+        toast.success(`${file.name} uploaded.`, { id: toastId });
       } catch (err) {
-        toast.error(`Failed to upload ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
+        toast.error(`Failed to upload ${file.name}: ${err instanceof Error ? err.message : String(err)}`, {
+          id: toastId,
+        });
       }
     }
     if (newIds.length) onUpload?.(newIds);
@@ -97,12 +107,16 @@ export function ChatInput({
                 className="rounded-full text-muted-foreground"
                 disabled={disabled || uploadMutation.isPending}
                 onClick={() => fileInputRef.current?.click()}
-                aria-label="Attach a dataset"
+                aria-label={uploadMutation.isPending ? "Uploading…" : "Attach a dataset"}
               >
-                <Paperclip className="size-4" />
+                {uploadMutation.isPending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Paperclip className="size-4" />
+                )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Upload a CSV or XLSX</TooltipContent>
+            <TooltipContent>{uploadMutation.isPending ? "Uploading…" : "Upload a CSV or XLSX"}</TooltipContent>
           </Tooltip>
           <Button
             size="icon-sm"
