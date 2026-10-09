@@ -594,7 +594,7 @@ project (`[tool.uv] package = false`) that depends on every member so a single
   `GEMINI_MODEL`/`OPENROUTER_MODEL` ever change, add a matching one via the
   same mutation (or the UI) or that model's spend silently reads as $0.
   Verified live via GraphQL `costSummary`/`spanLatencyMsQuantile` on the
-  `voiceagent` project that both a real, non-zero $ total and a real
+  `aidataagent` project that both a real, non-zero $ total and a real
   latency quantile come back - this is also exactly what the Phoenix UI's
   own cost/latency dashboard reads, so "what did this cost us yesterday"
   is answerable there without reading raw logs, per the Phase 7 checklist.
