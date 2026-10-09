@@ -9,3 +9,7 @@ build/
 .ruff_cache/
 uv.lock.bak
 scripts/chart_output/
+# Ephemeral Playwright MCP tool output (browser snapshots/console logs/
+# screenshots generated while testing the app in-session) - not project
+# artifacts, shouldn't be committed.
+.playwright-mcp/

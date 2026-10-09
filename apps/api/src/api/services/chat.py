@@ -13,6 +13,18 @@ from core.db import get_session
 from core.models import ChatMessage, ChatSession, ChatSessionDataset, PendingTransform
 
 
+def _pending_transform_diff(p: PendingTransform) -> dict:
+    return {
+        "columns_added": p.columns_added,
+        "columns_removed": p.columns_removed,
+        "row_count_before": p.row_count_before,
+        "row_count_after": p.row_count_after,
+        "column_count_before": p.column_count_before,
+        "column_count_after": p.column_count_after,
+        "summary": p.diff_summary,
+    }
+
+
 def ask_question(
     dataset_ids: list[str],
     question: str,
@@ -87,10 +99,11 @@ def ask_question(
                 )
             )
 
+    assistant_message_id = uuid.uuid4()
     with get_session() as session:
         session.add(
             ChatMessage(
-                id=uuid.uuid4(),
+                id=assistant_message_id,
                 session_id=session_id_value,
                 role="assistant",
                 content=result.answer,
@@ -109,6 +122,7 @@ def ask_question(
 
     return {
         "session_id": str(session_id_value),
+        "message_id": str(assistant_message_id),
         "user_id": str(user.id),
         "dataset_ids": all_dataset_ids,
         "resolved_dataset_id": result.resolved_dataset_id,
@@ -121,7 +135,18 @@ def ask_question(
         "prompt_tokens": result.prompt_tokens,
         "completion_tokens": result.completion_tokens,
         "attempts": result.attempts,
-        "artifact_html": result.artifact_html,
+        # The artifact (a chart/EDA report - several MB, sometimes 10+MB now
+        # that a multi-chart turn combines more than one - see
+        # orchestrator._combine_chart_htmls) is fetched separately via
+        # GET /chat/messages/{message_id}/artifact instead of inlined here.
+        # See get_session_history's identical change for why: inlining it
+        # in every response referencing this message is what made a
+        # chart-heavy session balloon to 80+MB per history load - confirmed
+        # live (a real 40-message session measured at 84MB), and the
+        # likely cause of intermittent request failures on chart turns
+        # specifically (both the size and the extra agent time a multi-
+        # chart turn now genuinely takes).
+        "has_artifact": bool(result.artifact_html),
         "diff": result.diff,
         "pending_transform_id": str(pending_transform_id) if pending_transform_id else None,
         "remembered_fact": result.remembered_fact,
@@ -137,11 +162,25 @@ def get_session_history(session_id: str) -> dict:
         )
         if chat_session is None:
             raise ValueError(f"No chat session found with id {session_id}")
-        return {
-            "session_id": str(chat_session.id),
-            "dataset_ids": [str(link.dataset_id) for link in chat_session.dataset_links],
-            "user_id": str(chat_session.user_id) if chat_session.user_id else None,
-            "messages": [
+
+        # A message's diff/status only lives on PendingTransform (see its
+        # model docstring) - without re-attaching it here, reloading a
+        # session (a hard refresh, or just revisiting it later) silently
+        # dropped the Confirm/Reject card for a still-pending transform,
+        # with no other way in the UI to act on it. Batched into one query
+        # rather than N+1 per message.
+        pending_ids = {m.pending_transform_id for m in chat_session.messages if m.pending_transform_id}
+        pending_by_id: dict[uuid.UUID, PendingTransform] = {}
+        if pending_ids:
+            pendings = session.scalars(
+                select(PendingTransform).where(PendingTransform.id.in_(pending_ids))
+            ).all()
+            pending_by_id = {p.id: p for p in pendings}
+
+        messages = []
+        for m in chat_session.messages:
+            pending = pending_by_id.get(m.pending_transform_id) if m.pending_transform_id else None
+            messages.append(
                 {
                     "role": m.role,
                     "content": m.content,
@@ -153,13 +192,39 @@ def get_session_history(session_id: str) -> dict:
                     "prompt_tokens": m.prompt_tokens,
                     "completion_tokens": m.completion_tokens,
                     "attempts": m.attempts,
-                    "artifact_html": m.artifact_html,
+                    "id": str(m.id),
+                    "has_artifact": bool(m.artifact_html),
                     "pending_transform_id": str(m.pending_transform_id) if m.pending_transform_id else None,
+                    "diff": _pending_transform_diff(pending) if pending else None,
+                    "pending_transform_status": pending.status if pending else None,
                     "created_at": m.created_at.isoformat() if m.created_at else None,
                 }
-                for m in chat_session.messages
-            ],
+            )
+
+        return {
+            "session_id": str(chat_session.id),
+            "dataset_ids": [str(link.dataset_id) for link in chat_session.dataset_links],
+            "user_id": str(chat_session.user_id) if chat_session.user_id else None,
+            "messages": messages,
         }
+
+
+class MessageArtifactNotFound(Exception):
+    pass
+
+
+def get_message_artifact(message_id: str) -> str:
+    """Fetched on demand (GET /chat/messages/{id}/artifact) rather than
+    inlined into ask_question's or get_session_history's response - see the
+    "has_artifact" comment on both for why: a chart/EDA artifact is
+    several MB (occasionally 10+MB for a multi-chart turn), and sending
+    every historical message's artifact on every session load doesn't
+    scale - confirmed live at 84MB for one real 40-message session."""
+    with get_session() as session:
+        message = session.get(ChatMessage, uuid.UUID(message_id))
+        if message is None or not message.artifact_html:
+            raise MessageArtifactNotFound(f"No artifact found for message {message_id}")
+        return message.artifact_html
 
 
 def list_sessions(user_id: str) -> dict:

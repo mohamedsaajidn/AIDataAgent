@@ -35,6 +35,7 @@ def build_chart_code(spec: dict, dataset_name: str) -> str:
     x, y, agg = spec.get("x"), spec.get("y"), spec.get("agg")
     filters = spec.get("filters") or []
     date_part = spec.get("date_part")
+    color = spec.get("color")
     title = spec.get("title") or default_title(spec)
 
     lines = [
@@ -55,15 +56,15 @@ def build_chart_code(spec: dict, dataset_name: str) -> str:
     if chart_type == "histogram":
         lines.append(f"fig = px.histogram(df, x={x!r}, title={title!r})")
     elif chart_type == "bar":
-        lines.extend(_render_bar(x, y, agg, title))
+        lines.extend(_render_bar(x, y, agg, title, color))
     elif chart_type in ("pie", "donut"):
         lines.extend(_render_pie(chart_type, x, y, agg, title))
     elif chart_type == "scatter":
         lines.extend(_render_scatter(x, y, title))
     elif chart_type == "line":
-        lines.extend(_render_line(x, y, agg, title))
+        lines.extend(_render_line(x, y, agg, title, color))
     elif chart_type == "area":
-        lines.extend(_render_area(x, y, agg, title))
+        lines.extend(_render_area(x, y, agg, title, color))
     elif chart_type == "violin":
         lines.extend(_render_violin(x, y, title))
     else:  # box
@@ -96,28 +97,63 @@ def _render_filter(f: dict) -> str:
     return f"df = df[df[{col!r}] {op} {f['value']!r}]"
 
 
-def _render_bar(x: str, y: str | None, agg: str | None, title: str) -> list[str]:
+def _render_bar(x: str, y: str | None, agg: str | None, title: str, color: str | None = None) -> list[str]:
+    if not color:
+        if not y or agg == "count":
+            group_line = f"grouped = df.groupby({x!r}).size().reset_index(name='value')"
+        else:
+            group_line = f"grouped = df.groupby({x!r})[{y!r}].{agg or 'sum'}().reset_index(name='value')"
+
+        return [
+            group_line,
+            "grouped = grouped.sort_values('value', ascending=False)",
+            f"if len(grouped) > {BAR_TOP_N}:",
+            # Cast to string before adding the "Other" row: x may be a
+            # datetime (or other non-string) column, and mixing real
+            # timestamps with the literal string "Other" in one column makes
+            # Plotly misdetect the axis type in the browser - the chart
+            # still "succeeds" (no Python error, a valid chart.html gets
+            # written) but renders blank, since this happens client-side in
+            # the browser's JS, not in this process.
+            f"    grouped[{x!r}] = grouped[{x!r}].astype(str)",
+            f"    top = grouped.iloc[:{BAR_TOP_N}].copy()",
+            f"    other_total = grouped.iloc[{BAR_TOP_N}:]['value'].sum()",
+            f"    other_row = pd.DataFrame([{{{x!r}: 'Other', 'value': other_total}}])",
+            "    grouped = pd.concat([top, other_row], ignore_index=True)",
+            f"fig = px.bar(grouped, x={x!r}, y='value', title={title!r})",
+        ]
+
+    # A split/grouped bar chart (color = a second categorical column, e.g.
+    # "count by Geography, separated by whether they churned") - each x
+    # value now has one row PER color sub-group, so top-N has to rank x by
+    # its TOTAL count across all sub-groups first, then keep every
+    # sub-group row for the surviving x values. There's no clean way to
+    # decompose a synthetic "Other" bucket across an unknown number of
+    # color sub-groups (unlike the single-dimension case above), so
+    # anything past the top N is dropped outright rather than bucketed.
     if not y or agg == "count":
-        group_line = f"grouped = df.groupby({x!r}).size().reset_index(name='value')"
+        group_line = f"grouped = df.groupby([{x!r}, {color!r}]).size().reset_index(name='value')"
     else:
-        group_line = f"grouped = df.groupby({x!r})[{y!r}].{agg or 'sum'}().reset_index(name='value')"
+        group_line = f"grouped = df.groupby([{x!r}, {color!r}])[{y!r}].{agg or 'sum'}().reset_index(name='value')"
 
     return [
         group_line,
-        "grouped = grouped.sort_values('value', ascending=False)",
-        f"if len(grouped) > {BAR_TOP_N}:",
-        # Cast to string before adding the "Other" row: x may be a datetime
-        # (or other non-string) column, and mixing real timestamps with the
-        # literal string "Other" in one column makes Plotly misdetect the
-        # axis type in the browser - the chart still "succeeds" (no Python
-        # error, a valid chart.html gets written) but renders blank, since
-        # this happens client-side in the browser's JS, not in this process.
-        f"    grouped[{x!r}] = grouped[{x!r}].astype(str)",
-        f"    top = grouped.iloc[:{BAR_TOP_N}].copy()",
-        f"    other_total = grouped.iloc[{BAR_TOP_N}:]['value'].sum()",
-        f"    other_row = pd.DataFrame([{{{x!r}: 'Other', 'value': other_total}}])",
-        "    grouped = pd.concat([top, other_row], ignore_index=True)",
-        f"fig = px.bar(grouped, x={x!r}, y='value', title={title!r})",
+        f"grouped[{x!r}] = grouped[{x!r}].astype(str)",
+        # Cast color to string too - a 0/1 int flag (e.g. a boolean-typed
+        # "Exited" column) passed to px.bar's color= untouched gets read as
+        # a CONTINUOUS value by Plotly (a colorbar gradient, one blended
+        # color per bar) rather than two distinct, legend-labeled groups -
+        # the grouping itself (barmode='group') still works either way, but
+        # the chart no longer visually reads as "split into categories" at
+        # all. Casting forces Plotly's discrete/qualitative color path.
+        f"grouped[{color!r}] = grouped[{color!r}].astype(str)",
+        f"totals = grouped.groupby({x!r})['value'].sum().sort_values(ascending=False)",
+        f"if len(totals) > {BAR_TOP_N}:",
+        f"    keep = set(totals.index[:{BAR_TOP_N}].tolist())",
+        f"    grouped = grouped[grouped[{x!r}].isin(keep)]",
+        f"category_orders = {{{x!r}: totals.index[:{BAR_TOP_N}].tolist()}}",
+        f"fig = px.bar(grouped, x={x!r}, y='value', color={color!r}, barmode='group', "
+        f"category_orders=category_orders, title={title!r})",
     ]
 
 
@@ -150,19 +186,37 @@ def _render_scatter(x: str, y: str, title: str) -> list[str]:
     ]
 
 
-def _render_line(x: str, y: str, agg: str | None, title: str) -> list[str]:
+def _render_line(x: str, y: str, agg: str | None, title: str, color: str | None = None) -> list[str]:
+    if not color:
+        return [
+            f"grouped = df.groupby({x!r})[{y!r}].{agg or 'sum'}().reset_index(name='value')",
+            f"grouped = grouped.sort_values({x!r})",
+            f"fig = px.line(grouped, x={x!r}, y='value', title={title!r})",
+        ]
     return [
-        f"grouped = df.groupby({x!r})[{y!r}].{agg or 'sum'}().reset_index(name='value')",
+        f"grouped = df.groupby([{x!r}, {color!r}])[{y!r}].{agg or 'sum'}().reset_index(name='value')",
+        # See _render_bar's identical cast for why - forces Plotly's
+        # discrete/qualitative color path instead of a continuous gradient.
+        f"grouped[{color!r}] = grouped[{color!r}].astype(str)",
         f"grouped = grouped.sort_values({x!r})",
-        f"fig = px.line(grouped, x={x!r}, y='value', title={title!r})",
+        f"fig = px.line(grouped, x={x!r}, y='value', color={color!r}, title={title!r})",
     ]
 
 
-def _render_area(x: str, y: str, agg: str | None, title: str) -> list[str]:
+def _render_area(x: str, y: str, agg: str | None, title: str, color: str | None = None) -> list[str]:
+    if not color:
+        return [
+            f"grouped = df.groupby({x!r})[{y!r}].{agg or 'sum'}().reset_index(name='value')",
+            f"grouped = grouped.sort_values({x!r})",
+            f"fig = px.area(grouped, x={x!r}, y='value', title={title!r})",
+        ]
     return [
-        f"grouped = df.groupby({x!r})[{y!r}].{agg or 'sum'}().reset_index(name='value')",
+        f"grouped = df.groupby([{x!r}, {color!r}])[{y!r}].{agg or 'sum'}().reset_index(name='value')",
+        # See _render_bar's identical cast for why - forces Plotly's
+        # discrete/qualitative color path instead of a continuous gradient.
+        f"grouped[{color!r}] = grouped[{color!r}].astype(str)",
         f"grouped = grouped.sort_values({x!r})",
-        f"fig = px.area(grouped, x={x!r}, y='value', title={title!r})",
+        f"fig = px.area(grouped, x={x!r}, y='value', color={color!r}, title={title!r})",
     ]
 
 
@@ -181,13 +235,15 @@ def _render_violin(x: str | None, y: str, title: str) -> list[str]:
 def default_title(spec: dict) -> str:
     chart_type, x, y = spec["chart_type"], spec.get("x"), spec.get("y")
     date_part = spec.get("date_part")
+    color = spec.get("color")
     x_label = f"{x} ({date_part})" if date_part else x
+    color_suffix = f", split by {color}" if color else ""
     if chart_type == "histogram":
         return f"Distribution of {x}"
     if chart_type in ("bar", "pie", "donut"):
-        return f"{y or 'Count'} by {x_label}"
+        return f"{y or 'Count'} by {x_label}{color_suffix}"
     if chart_type in ("line", "area"):
-        return f"{y} over {x_label}"
+        return f"{y} over {x_label}{color_suffix}"
     if chart_type == "scatter":
         return f"{y} vs {x}"
     return f"Distribution of {y}" + (f" by {x}" if x else "")

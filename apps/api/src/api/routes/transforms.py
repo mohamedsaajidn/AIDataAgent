@@ -7,6 +7,7 @@ from api.services.transforms import (
     VersionNotFound,
     confirm_transform,
     export_version,
+    get_dataset_sample,
     list_versions,
     reject_transform,
     set_active_version,
@@ -61,6 +62,15 @@ def set_active(dataset_id: str, request: SetActiveVersionRequest, user_id: str) 
     _require_editor_or_403(user_id)
     try:
         return set_active_version(dataset_id, request.version_id)
+    except VersionNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.get("/datasets/{dataset_id}/sample")
+def get_sample(dataset_id: str, limit: int = 30, version_id: str | None = None) -> dict:
+    limit = max(1, min(limit, 100))
+    try:
+        return get_dataset_sample(dataset_id, version_id, limit)
     except VersionNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
 

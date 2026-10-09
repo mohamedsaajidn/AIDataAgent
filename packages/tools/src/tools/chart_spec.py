@@ -24,6 +24,14 @@ _ALLOWED_FILTER_OPS = {"eq", "ne", "gt", "gte", "lt", "lte", "in"}
 DATE_PART_CHART_TYPES = {"bar", "pie", "donut", "line", "area"}
 DATE_PARTS = {"year", "month", "quarter"}
 
+# Which chart types support an optional second categorical column that
+# splits each x value into side-by-side/multi-line sub-series (plotly's
+# `color=`) - e.g. "count by Geography, separated by whether they churned".
+# Pie/donut can't meaningfully show a second dimension this way, and
+# scatter/box/violin/histogram are out of scope for this - see chart_spec's
+# validate_chart_spec.
+COLOR_SPLIT_CHART_TYPES = {"bar", "line", "area"}
+
 # Matches the profiler's own categorical threshold (tools.profiler) - above
 # this, a bar chart's x-axis stops being readable as individual bars.
 HIGH_CARDINALITY_THRESHOLD = 20
@@ -77,13 +85,31 @@ def validate_chart_spec(spec: dict, columns: dict[str, dict]) -> tuple[dict | No
     agg = spec.get("agg")
     filters = spec.get("filters") or []
     date_part = spec.get("date_part")
+    color = spec.get("color")
 
     if chart_type not in SUPPORTED_CHART_TYPES:
         return None, [f"'{spec.get('chart_type')}' isn't a supported chart type here."]
 
-    for name in (x, y):
+    for name in (x, y, color):
         if name and name not in columns:
             return None, [f"Column '{name}' doesn't exist in this dataset."]
+
+    # Splitting bars/lines/areas into sub-series by a second categorical
+    # column (e.g. "separate the bars by whether they churned or not") is
+    # only supported for these three types - see chart_render.py's
+    # color-aware _render_bar/_render_line/_render_area. Dropped here,
+    # centrally, rather than left for each type-specific validator to
+    # remember, so a chart type added later can't silently inherit a color
+    # split its renderer doesn't actually know how to draw.
+    if color and chart_type not in COLOR_SPLIT_CHART_TYPES:
+        notes.append(f"Splitting by '{color}' isn't supported for a {chart_type} chart - ignoring it.")
+        color = None
+    if color and color == x:
+        notes.append(f"Ignoring '{color}' as a split column since it's the same as '{x}'.")
+        color = None
+    if color and columns[color]["inferred_type"] not in _CATEGORICAL_TYPES:
+        notes.append(f"'{color}' isn't a categorical column, so it can't split the bars/lines into groups - ignoring it.")
+        color = None
 
     filter_error = _validate_filters(filters, columns)
     if filter_error:
@@ -113,13 +139,13 @@ def validate_chart_spec(spec: dict, columns: dict[str, dict]) -> tuple[dict | No
     if chart_type == "histogram":
         result, notes = _validate_histogram(x, y, agg, filters, columns, notes)
     elif chart_type == "bar":
-        result, notes = _validate_bar(x, y, agg, filters, columns, notes, date_part)
+        result, notes = _validate_bar(x, y, agg, filters, columns, notes, date_part, color)
     elif chart_type in ("pie", "donut"):
         result, notes = _validate_pie(chart_type, x, y, agg, filters, columns, notes, date_part)
     elif chart_type == "scatter":
         result, notes = _validate_scatter(x, y, filters, columns, notes)
     elif chart_type in ("line", "area"):
-        result, notes = _validate_line(chart_type, x, y, agg, filters, columns, notes)
+        result, notes = _validate_line(chart_type, x, y, agg, filters, columns, notes, color)
     else:
         result, notes = _validate_box(chart_type, x, y, filters, columns, notes)
 
@@ -157,7 +183,7 @@ def _validate_histogram(x, y, agg, filters, columns, notes):
     return {"chart_type": "histogram", "x": x, "y": None, "agg": None, "filters": filters}, notes
 
 
-def _validate_bar(x, y, agg, filters, columns, notes, date_part=None):
+def _validate_bar(x, y, agg, filters, columns, notes, date_part=None, color=None):
     if not x:
         return None, ["A bar chart needs a column to group by."]
 
@@ -188,7 +214,14 @@ def _validate_bar(x, y, agg, filters, columns, notes, date_part=None):
             "(by count) grouped with an 'Other' bucket so the chart stays readable."
         )
 
-    return {"chart_type": "bar", "x": x, "y": y, "agg": agg or ("sum" if y else "count"), "filters": filters}, notes
+    return {
+        "chart_type": "bar",
+        "x": x,
+        "y": y,
+        "agg": agg or ("sum" if y else "count"),
+        "filters": filters,
+        "color": color,
+    }, notes
 
 
 def _validate_pie(chart_type, x, y, agg, filters, columns, notes, date_part=None):
@@ -239,7 +272,7 @@ def _validate_scatter(x, y, filters, columns, notes):
     return None, [f"A scatter plot needs two numeric columns - '{x}' and '{y}' don't fit that."]
 
 
-def _validate_line(chart_type, x, y, agg, filters, columns, notes):
+def _validate_line(chart_type, x, y, agg, filters, columns, notes, color=None):
     if not x:
         return None, [f"A {chart_type} chart needs an x-axis column, usually a date."]
 
@@ -249,14 +282,21 @@ def _validate_line(chart_type, x, y, agg, filters, columns, notes):
     # have (a 3-category column is just as unordered as a 300-category one).
     if x_type not in ("datetime", "continuous"):
         notes.append(f"'{x}' isn't a time or ordered numeric column, so showing a bar chart instead.")
-        return {"chart_type": "bar", "x": x, "y": y, "agg": agg or "sum", "filters": filters}, notes
+        return {"chart_type": "bar", "x": x, "y": y, "agg": agg or "sum", "filters": filters, "color": color}, notes
 
     if not y:
         return None, [f"A {chart_type} chart needs a numeric y-axis column to plot over time."]
     if columns[y]["inferred_type"] not in _NUMERIC_TYPES:
         return None, [f"'{y}' isn't numeric, so it can't be a {chart_type} chart's y-axis."]
 
-    return {"chart_type": chart_type, "x": x, "y": y, "agg": agg or "sum", "filters": filters}, notes
+    return {
+        "chart_type": chart_type,
+        "x": x,
+        "y": y,
+        "agg": agg or "sum",
+        "filters": filters,
+        "color": color,
+    }, notes
 
 
 def _validate_box(chart_type, x, y, filters, columns, notes):

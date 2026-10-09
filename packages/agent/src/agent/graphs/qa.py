@@ -272,6 +272,7 @@ Return ONLY a JSON object with these keys:
 - "x": a column name for the x-axis or grouping/category, or null if not applicable
 - "y": a numeric column name for the y-axis/value, or null if not needed (e.g. a histogram, or a count-based chart)
 - "agg": one of "count", "sum", "mean", "median", or null
+- "color": a SECOND categorical column name to split each x value into side-by-side bars/lines by, or null - set this when the question asks to "separate"/"split"/"break down"/"group"/"color" the bars or lines by another column (e.g. "count plot of Geography, separated by whether they Exited" -> x="Geography", color="Exited"). Only meaningful for bar/line/area - leave null for every other chart type. If the question describes this as if it needs two colors/groups per category, this is what expresses that - do NOT try to force it into "x" or "y" instead.
 - "filters": a list of {{"column": ..., "op": "eq"|"ne"|"gt"|"gte"|"lt"|"lte"|"in", "value": ...}} objects, or an empty list
 - "date_part": one of "year", "month", "quarter", or null - set this when x is a date column and the question asks for a breakdown/trend at a coarser granularity than individual exact dates (e.g. "per year", "by month", "each quarter", "yearly trend"). Only applies to bar/pie/donut/line/area charts. Leave null otherwise - do not set it just because x happens to be a date.
 - "title": a short chart title
@@ -282,6 +283,12 @@ Guidance for the common types:
 - line/area: a numeric column (y) over an ordered/time column (x), usually a date.
 - scatter: relationship between two numeric columns (x and y).
 - box/violin: distribution of a numeric column (y), optionally grouped by a categorical column (x).
+
+If the question asks for a SEPARATE chart per column (e.g. "create count plots for Geography and
+Gender"), that's more than one chart request - this spec can only ever describe ONE chart, so fill
+it in for the first/primary column named only. Never try to cram two columns into "x" and "color"
+to fake a second chart - "color" is specifically for splitting ONE chart's bars/lines by a second
+column, not for requesting two separate charts.
 
 Respond with ONLY the JSON object, no other text.
 {retry_context}

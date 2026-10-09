@@ -1,0 +1,134 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: var(--font-sans);
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* Palette carried over from the old apps/web/src/index.css design tokens
+   (purple brand accent, warm-gray text/surfaces) - see CLAUDE.md's
+   frontend rewrite notes. Old --accent (the purple brand color) maps to
+   shadcn's --primary; shadcn's own --accent stays a subtle hover tint. */
+:root {
+    --background: #ffffff;
+    --foreground: #08060d;
+    --card: #ffffff;
+    --card-foreground: #08060d;
+    --popover: #ffffff;
+    --popover-foreground: #08060d;
+    --primary: #aa3bff;
+    --primary-foreground: #ffffff;
+    --secondary: #f4f3ec;
+    --secondary-foreground: #08060d;
+    --muted: #f4f3ec;
+    --muted-foreground: #6b6375;
+    --accent: rgba(170, 59, 255, 0.1);
+    --accent-foreground: #aa3bff;
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: #e5e4e7;
+    --input: #e5e4e7;
+    --ring: #aa3bff;
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --radius: 0.625rem;
+    --sidebar: #f4f3ec;
+    --sidebar-foreground: #08060d;
+    --sidebar-primary: #aa3bff;
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-accent: rgba(170, 59, 255, 0.1);
+    --sidebar-accent-foreground: #aa3bff;
+    --sidebar-border: #e5e4e7;
+    --sidebar-ring: #aa3bff;
+}
+
+.dark {
+    --background: #16171d;
+    --foreground: #f3f4f6;
+    --card: #1c1d24;
+    --card-foreground: #f3f4f6;
+    --popover: #1c1d24;
+    --popover-foreground: #f3f4f6;
+    --primary: #c084fc;
+    --primary-foreground: #0b0710;
+    --secondary: #1f2028;
+    --secondary-foreground: #f3f4f6;
+    --muted: #1f2028;
+    --muted-foreground: #9ca3af;
+    --accent: rgba(192, 132, 252, 0.15);
+    --accent-foreground: #c084fc;
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: #2e303a;
+    --input: #2e303a;
+    --ring: #c084fc;
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --sidebar: #1c1d24;
+    --sidebar-foreground: #f3f4f6;
+    --sidebar-primary: #c084fc;
+    --sidebar-primary-foreground: #0b0710;
+    --sidebar-accent: rgba(192, 132, 252, 0.15);
+    --sidebar-accent-foreground: #c084fc;
+    --sidebar-border: #2e303a;
+    --sidebar-ring: #c084fc;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+  html {
+    @apply font-sans;
+    }
+}

@@ -1,8 +1,14 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from agent.schema_context import DatasetNotFound
-from api.services.chat import ask_question, get_session_history, list_sessions
+from api.services.chat import (
+    MessageArtifactNotFound,
+    ask_question,
+    get_message_artifact,
+    get_session_history,
+    list_sessions,
+)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -53,3 +59,12 @@ def get_session(session_id: str) -> dict:
         return get_session_history(session_id)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+@router.get("/messages/{message_id}/artifact")
+def get_artifact(message_id: str) -> Response:
+    try:
+        html = get_message_artifact(message_id)
+    except MessageArtifactNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return Response(content=html, media_type="text/html")
