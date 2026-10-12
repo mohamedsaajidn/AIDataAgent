@@ -10,14 +10,7 @@
 
 ---
 
-<!--
-  Add a short screen recording here before publishing: upload a file,
-  ask a question, get a chart, propose a transform, confirm it.
-  Save it as docs/demo.gif (or a hosted .mp4 link) and this will render.
--->
-![Demo](docs/demo.gif)
-
-https://github.com/user-attachments/assets/8cf03232-f4cf-476f-bf83-77387337a92c
+https://github.com/user-attachments/assets/c6b5867a-d2d4-407d-a72d-245e28ec1efa
 
 ## Why I built this
 
