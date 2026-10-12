@@ -155,7 +155,6 @@ This is a personal project / proof of concept, not a hardened production system 
 
 - No real authentication yet — identity is a simple, caller-supplied string, not a login system.
 - Requests are synchronous (no streaming responses yet).
-- Free-tier LLM models can be rate-limited or retired upstream without notice — swap the model in `.env` if that happens.
 - Infra runs locally via Docker Compose by default; moving to managed cloud services is a configuration change, not a rewrite, but hasn't been done here.
 
 ## License
@@ -164,4 +163,4 @@ Not yet licensed — treat this as "all rights reserved, portfolio-viewing only"
 
 ## Author
 
-Built by **Mohamed Saajid** — feel free to open an issue, or reach out if you'd like to talk through how any of this works.
+Built by **Mohamed Saajid** — reach out if you'd like to talk through how any of this works.
