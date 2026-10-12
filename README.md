@@ -14,6 +14,8 @@ https://github.com/user-attachments/assets/c6b5867a-d2d4-407d-a72d-245e28ec1efa
 
 https://github.com/user-attachments/assets/34fd88ba-a01f-405f-8cc1-62fcbf6371d6
 
+https://github.com/user-attachments/assets/7d2e5708-3ed9-4741-ae0f-894a58db1aa3
+
 ## Why I built this
 
 Most "chat with your data" tools quietly translate every question into SQL and hope the question fits that shape. The moment you ask for a regression, a hypothesis test, or a chart with a weird bucketing rule, that approach falls apart.
