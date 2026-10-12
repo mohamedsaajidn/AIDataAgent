@@ -91,7 +91,7 @@ class Settings(BaseSettings):
     # spans nowhere - flip on once docker-compose up includes phoenix.
     phoenix_enabled: bool = False
     phoenix_collector_endpoint: str = "http://localhost:4317"
-    phoenix_project_name: str = "voiceagent"
+    phoenix_project_name: str = "aidataagent"
 
     @property
     def postgres_dsn(self) -> str:
