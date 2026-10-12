@@ -159,7 +159,7 @@ This is a personal project / proof of concept, not a hardened production system 
 
 ## License
 
-Not yet licensed — treat this as "all rights reserved, portfolio-viewing only" until a `LICENSE` file is added. *(Planning to add one? MIT is the common choice for a project like this.)*
+Not yet licensed — treat this as "all rights reserved, portfolio-viewing only" until a `LICENSE` file is added.
 
 ## Author
 
