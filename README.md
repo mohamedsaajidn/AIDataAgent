@@ -17,6 +17,8 @@
 -->
 ![Demo](docs/demo.gif)
 
+https://github.com/user-attachments/assets/8cf03232-f4cf-476f-bf83-77387337a92c
+
 ## Why I built this
 
 Most "chat with your data" tools quietly translate every question into SQL and hope the question fits that shape. The moment you ask for a regression, a hypothesis test, or a chart with a weird bucketing rule, that approach falls apart.
