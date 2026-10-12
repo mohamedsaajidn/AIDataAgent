@@ -70,7 +70,6 @@ A question never reaches the sandbox as raw user input — the agent generates t
 apps/
   api/       FastAPI backend — chat, transforms, datasets, users
   web/       Next.js frontend
-  worker/    async job runner
 packages/
   core/      settings, DB/S3/Redis/Chroma clients, catalog ORM models
   agent/     LangGraph orchestrator, the LLM provider wrapper, memory (Redis + Chroma)
@@ -149,7 +148,6 @@ This wasn't built as a toy that happens to also run code — the execution bound
 - **Sandbox isolation** — every execution is a brand-new, network-isolated, read-only-filesystem container with memory/CPU/process limits. Verified directly: writes to the filesystem outside the one writable scratch directory fail with real OS-level permission errors.
 - **PII never reaches the model or the user** — detected at upload time (by column name *and* content), redacted from every prompt and every response at a single chokepoint, checked both by column identity and by raw value so it can't leak through an unnamed list of values either.
 - **Two-phase changes, always** — a transform or join is proposed, never applied, until a human explicitly confirms it. Every confirmed version is immutable; undo is just repointing to an earlier version, nothing is ever deleted or recomputed.
-- **Role-gated commits** — proposing a change is open to anyone; committing one requires an editor role.
 
 ## Known limitations
 
