@@ -75,7 +75,7 @@ packages/
   agent/     LangGraph orchestrator, the LLM provider wrapper, memory (Redis + Chroma)
   sandbox/   isolated code-execution engine (hardened Docker container)
   tools/     pure, deterministic data operations — parsing, profiling, PII scan, charts, joins
-scripts/     one-off scripts (smoke tests, user role promotion)
+scripts/     one-off scripts (smoke tests)
 ```
 
 ## Getting started

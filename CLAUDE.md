@@ -346,14 +346,14 @@ project (`[tool.uv] package = false`) that depends on every member so a single
 - Raw row-level data is never sent to the LLM. Only schema, column
   stats/samples, and aggregated results go into prompts.
 - Columns flagged as PII during profiling are excluded from prompts and
-  from any response text — see "Guardrails: PII enforcement & RBAC" below
-  for how this is actually enforced, not just prompted for.
+  from any response text — see "Guardrails: PII enforcement" below for how
+  this is actually enforced, not just prompted for.
 - Destructive operations (column drop, in-place-feeling overwrite, a join
   that changes row count) require an explicit preview + confirmation step
   (`PendingTransform` — see "Transforms, joins & versioning" below) — never
   auto-commit a transform.
 
-## Guardrails: PII enforcement & RBAC (Phase 7)
+## Guardrails: PII enforcement (Phase 7)
 
 - **PII enforcement is a redaction chokepoint, not a prompt hint.**
   `schema_context.build_schema_context()`'s `[PII - do not echo raw values]`
@@ -399,42 +399,20 @@ project (`[tool.uv] package = false`) that depends on every member so a single
   a key would either leave the value in place as the key anyway, or
   collapse multiple distinct keys onto one placeholder and silently lose
   data, so this stays a documented gap rather than a half-fix.
-- **RBAC role lives on the `User` row, never on the request.**
-  `core.models.User.role` (`"viewer"` | `"editor"`, default `"viewer"`) is
-  only ever changed by a direct DB update - `scripts/promote_user.py
-  <external_id> <viewer|editor>` - or a future admin endpoint. No API
-  request body or query param can set a caller's own role: `POST
-  /chat/ask`'s `user_id` and everywhere else a caller supplies an identity
-  only ever *resolve* an existing user (`api.services.users.
-  get_or_create_user`, which never sets `role`), never grant one. This is
-  what makes the checklist's "even by asking the agent directly"
-  requirement true architecturally, not just at one endpoint: there is no
-  path, prompt-injection or otherwise, that lets a request change its own
-  privilege.
-- **Enforcement point is the commit, not the propose.** `POST
-  /transforms/{id}/confirm` and `POST /datasets/{id}/active-version` both
-  require `role == "editor"` (`api.services.users.require_editor`, checked
-  via a `user_id` query param, 403 on an under-privileged or unknown user -
-  an unknown external_id fails exactly like a viewer, never a 404, so a
-  probe can't use this to learn who has an account). `POST
-  /transforms/{id}/reject` is deliberately left open to any role - it only
-  discards a preview, never mutates committed state. This lines up with
-  the existing two-phase propose/confirm boundary (see "Transforms, joins &
-  versioning" below): the orchestrator's `propose_transform`/
-  `propose_join` tools already only ever produced a `PendingTransform`
-  preview and had no code path to the confirm endpoint at all - Phase 7
-  doesn't change that shape, it gates the one place a human (or an agent
-  impersonating one) could otherwise commit. Verified live: a viewer-role
-  user asking the agent directly to "drop this column and commit it
-  without asking me to confirm" still only gets offered a preview
-  (`route: "chat"`, no tool call at all in that case); a viewer hitting
-  `confirm` against a real, agent-proposed `PendingTransform` id gets 403
-  and the transform stays `pending`; the same id confirmed by an editor
-  succeeds and produces a new `DatasetVersion`.
-- No login exists in this POC (see "Frontend identity" below), so `role`
-  is the only access boundary that exists right now - treat a "viewer" as
-  the default, least-privilege assumption for any new mutating endpoint,
-  the same way `User.role` already defaults to it.
+- **RBAC (viewer/editor roles) was built in Phase 7, then deliberately
+  removed.** It worked as designed - `User.role`, `require_editor`,
+  `GET /users/me`, and the frontend's disabled-Confirm-for-viewers UI all
+  functioned and were verified live. It was removed because this is a
+  solo personal project with no real authentication backing it: `user_id`
+  is just a caller-supplied string, so "role" was a permission system with
+  no real identity underneath it to attach meaning to - every mutating
+  endpoint (`POST /transforms/{id}/confirm`, `POST
+  /datasets/{id}/active-version`) now works unconditionally, no `user_id`
+  needed on either call. If this project ever gets real multi-user auth,
+  re-introducing a role check at that point is straightforward (the git
+  history of this removal is the reference implementation) - but don't
+  re-add a role distinction without real auth underneath it, since that's
+  exactly the gap that made removing it the right call here.
 
 ## Observability (Phase 7) - Arize Phoenix, not Langfuse
 
@@ -863,8 +841,9 @@ in place** (old Vite files removed via `git rm`, fully recoverable from
 history, not kept alongside). Confirmed scope for this rewrite, so it
 doesn't get second-guessed later: **UI-only** - `POST /chat/ask` keeps its
 existing single blocking request/response contract (no SSE/streaming was
-added), and the only backend change at all was one small additive
-endpoint, `GET /users/me` (see below).
+added). (RBAC, and the `GET /users/me` endpoint this rewrite originally
+added to surface it, were both removed later - see "Guardrails: PII
+enforcement" above.)
 
 - **Stack**: Next.js (App Router) + TypeScript, predominantly client
   components (`"use client"` at the shell/page level) - this app has no
@@ -901,18 +880,6 @@ endpoint, `GET /users/me` (see below).
   declined - the env-var gate was kept on purpose). When real auth
   eventually replaces this, `getCurrentUserId()` is still the only
   function that needs to change.
-- **One small additive backend endpoint**: `GET /users/me?user_id=...`
-  (`apps/api/src/api/routes/users.py`) returns `{external_id, role}` via
-  the existing `get_or_create_user` - added specifically because the old
-  UI had no way to show a user's viewer/editor role or pre-disable an
-  action they can't perform; before this, a viewer only found out via a
-  403 after clicking Confirm. `src/hooks/use-current-user.ts`'s
-  `useCurrentUserRole` wraps it and feeds `transform-card.tsx` (Confirm
-  disabled + tooltip for viewers, Reject always enabled - matching the
-  backend's actual gate exactly, see "Guardrails" above) and
-  `version-timeline.tsx`'s "Make active" button the same way. This
-  endpoint never mutates role - a brand-new `user_id` still comes back
-  `"viewer"`, same least-privilege default as everywhere else.
 - **Result rendering is shape-driven, not schema-driven**: `AskResponse
   .result`/`ChatMessageRecord.result` is genuinely loose-typed on the
   backend (the sandbox's `result` variable can be a scalar, list, dict, or

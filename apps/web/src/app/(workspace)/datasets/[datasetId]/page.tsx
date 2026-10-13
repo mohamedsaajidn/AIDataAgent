@@ -11,12 +11,10 @@ import { DataSampleTable } from "@/components/datasets/data-sample-table";
 import { SchemaTable } from "@/components/datasets/schema-table";
 import { VersionTimeline } from "@/components/datasets/version-timeline";
 import { useDataset } from "@/hooks/use-datasets";
-import { getCurrentUserId } from "@/lib/auth";
 import { formatNumber } from "@/lib/utils";
 import { useChatStore } from "@/store/chat-store";
 
 export default function DatasetDetailPage() {
-  const userId = getCurrentUserId()!;
   const { datasetId } = useParams<{ datasetId: string }>();
   const router = useRouter();
   const { data: dataset, isLoading } = useDataset(datasetId);
@@ -67,7 +65,7 @@ export default function DatasetDetailPage() {
           <DataSampleTable datasetId={datasetId} />
         </TabsContent>
         <TabsContent value="versions" className="pt-4">
-          <VersionTimeline datasetId={datasetId} userId={userId} />
+          <VersionTimeline datasetId={datasetId} />
         </TabsContent>
       </Tabs>
 

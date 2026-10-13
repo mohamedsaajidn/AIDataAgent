@@ -27,7 +27,7 @@ const MARKDOWN_COMPONENTS = {
   td: TableCell,
 };
 
-export function MessageBubble({ message, userId }: { message: DisplayMessage; userId: string }) {
+export function MessageBubble({ message }: { message: DisplayMessage }) {
   const isUser = message.role === "user";
   const content =
     message.content && resultRendersAsTable(message.result ?? null)
@@ -84,7 +84,6 @@ export function MessageBubble({ message, userId }: { message: DisplayMessage; us
           <TransformCard
             pendingId={message.pendingTransformId}
             diff={message.diff}
-            userId={userId}
             initialStatus={message.pendingTransformStatus}
           />
         )}

@@ -19,11 +19,9 @@ import { useDataset } from "@/hooks/use-datasets";
  * doesn't own its own width/border/collapse-rail markup any more. */
 export function VersionSidebar({
   datasetId,
-  userId,
   onCollapse,
 }: {
   datasetId: string | null;
-  userId: string;
   onCollapse: () => void;
 }) {
   const { data: dataset } = useDataset(datasetId);
@@ -49,7 +47,7 @@ export function VersionSidebar({
       <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
         <div className="min-w-0 p-3">
           {datasetId ? (
-            <VersionTimeline datasetId={datasetId} userId={userId} />
+            <VersionTimeline datasetId={datasetId} />
           ) : (
             <EmptyState
               icon={History}

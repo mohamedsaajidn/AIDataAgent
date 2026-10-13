@@ -176,13 +176,6 @@ export interface DatasetSampleResponse {
 
 export type ExportFormat = "csv" | "xlsx" | "parquet";
 
-export type UserRole = "viewer" | "editor";
-
-export interface WhoamiResponse {
-  external_id: string;
-  role: UserRole;
-}
-
 export interface HealthResponse {
   postgres: string;
   minio: string;

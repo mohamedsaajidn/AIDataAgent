@@ -8,11 +8,9 @@ import type { DisplayMessage } from "@/lib/types/ui";
 
 export function MessageList({
   messages,
-  userId,
   pending,
 }: {
   messages: DisplayMessage[];
-  userId: string;
   pending: boolean;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -24,7 +22,7 @@ export function MessageList({
   return (
     <div className="mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4 px-4 py-6">
       {messages.map((m, i) => (
-        <MessageBubble key={i} message={m} userId={userId} />
+        <MessageBubble key={i} message={m} />
       ))}
       {pending && <WorkingIndicator />}
       <div ref={bottomRef} />

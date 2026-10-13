@@ -4,24 +4,16 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useCurrentUserRole } from "@/hooks/use-current-user";
 import { useConfirmTransform, useRejectTransform } from "@/hooks/use-transforms";
 import type { DiffSummary, PendingTransformStatus } from "@/lib/types/api";
 
-/** Mirrors the backend's actual RBAC gate exactly - see
- * apps/api/src/api/services/users.require_editor and CLAUDE.md's
- * "Guardrails" section: confirm requires the editor role, reject is
- * deliberately left open to any role since it only discards a preview. */
 export function TransformCard({
   pendingId,
   diff,
-  userId,
   initialStatus,
 }: {
   pendingId: string;
   diff: DiffSummary;
-  userId: string;
   /** From session history (see ChatMessageRecord.pending_transform_status) -
    * undefined for a message just appended live this session, which can
    * only be "pending" so far. Without this, reopening a session with a
@@ -33,16 +25,14 @@ export function TransformCard({
   const [resolved, setResolved] = useState<"confirmed" | "rejected" | null>(
     initialStatus === "confirmed" || initialStatus === "rejected" ? initialStatus : null,
   );
-  const { data: whoami } = useCurrentUserRole(userId);
   const confirmMutation = useConfirmTransform();
   const rejectMutation = useRejectTransform();
 
-  const canConfirm = whoami?.role === "editor";
   const resolving = confirmMutation.isPending || rejectMutation.isPending;
 
   async function handleConfirm() {
     try {
-      await confirmMutation.mutateAsync({ pendingId, userId });
+      await confirmMutation.mutateAsync(pendingId);
       setResolved("confirmed");
       toast.success("Transform applied - a new version was created.");
     } catch (err) {
@@ -73,16 +63,9 @@ export function TransformCard({
         </p>
       ) : (
         <div className="flex gap-2 pt-1">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span>
-                <Button size="sm" disabled={resolving || !canConfirm} onClick={handleConfirm}>
-                  Confirm
-                </Button>
-              </span>
-            </TooltipTrigger>
-            {!canConfirm && <TooltipContent>Requires the editor role to commit changes.</TooltipContent>}
-          </Tooltip>
+          <Button size="sm" disabled={resolving} onClick={handleConfirm}>
+            Confirm
+          </Button>
           <Button size="sm" variant="outline" disabled={resolving} onClick={handleReject}>
             Reject
           </Button>

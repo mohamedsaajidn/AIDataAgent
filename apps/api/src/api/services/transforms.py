@@ -11,7 +11,7 @@ from core.models import Column, Dataset, DatasetVersion, PendingTransform
 from core.settings import get_settings
 from core.storage import get_s3_client
 from tools.pii import redact_pii_from_result, scan_column
-from tools.profiler import coerce_types, profile_dataframe
+from tools.profiler import ALLOWED_TYPES, coerce_types, is_plausible_override, profile_dataframe
 
 try:
     from agent.schema_review import review_columns
@@ -101,27 +101,41 @@ def confirm_transform(pending_id: str) -> dict:
             select(Column).where(Column.dataset_version_id == pending.base_version_id)
         ).all()
         parent_descriptions = {c.name: c.description for c in parent_columns}
+        parent_types = {c.name: c.inferred_type for c in parent_columns}
 
         df = pd.read_parquet(io.BytesIO(parquet_bytes))
         profiles = profile_dataframe(df)
         for profile in profiles:
+            # Carry forward the existing inferred_type/description for any
+            # column this transform didn't touch (matched by name) - without
+            # this, every confirm re-derives inferred_type from scratch via
+            # the raw cardinality heuristic alone (no LLM pass - see below),
+            # which silently regressed a column the LLM had already correctly
+            # disambiguated at upload time (e.g. "continuous") back to the
+            # heuristic's own ambiguous small-cardinality guess
+            # ("categorical") on the very first transform/join confirm, even
+            # for columns the transform never touched. Unconditionally
+            # nulling every column's description here had the same bug for
+            # descriptions, which is why that part was already carried
+            # forward - inferred_type needs the identical treatment.
+            if profile["name"] in parent_types:
+                profile["inferred_type"] = parent_types[profile["name"]]
+            profile["description"] = parent_descriptions.get(profile["name"])
+
             is_pii, entities = scan_column(
                 profile["name"], profile["sample_values"], is_categorical=profile["inferred_type"] == "categorical"
             )
             profile["is_pii"] = is_pii
             profile["pii_entities"] = entities
-            # Carry forward the existing description for any column this
-            # transform didn't touch (matched by name) - unconditionally
-            # nulling every column's description here meant a single
-            # transform permanently lost the whole dataset's descriptions,
-            # not just the columns the transform actually changed.
-            profile["description"] = parent_descriptions.get(profile["name"])
 
         # A column with no carried-forward description is either genuinely
         # new (the transform added it) or renamed - either way it has no
         # description yet, so give it one the same best-effort way ingestion
-        # does. Only the new/renamed columns, not the whole dataset again,
-        # to keep this cheap on every confirm.
+        # does - and, same as ingestion, let the LLM correct the heuristic's
+        # type guess too (not just supply a description) when it's
+        # confident and the override is plausible for the real cardinality.
+        # Only the new/renamed columns, not the whole dataset again, to keep
+        # this cheap on every confirm.
         new_columns = [p for p in profiles if p["description"] is None]
         if new_columns and review_columns is not None:
             try:
@@ -129,7 +143,11 @@ def confirm_transform(pending_id: str) -> dict:
             except Exception:
                 reviewed = {}
             for profile in new_columns:
-                profile["description"] = reviewed.get(profile["name"], {}).get("description")
+                review = reviewed.get(profile["name"], {})
+                llm_type = review.get("inferred_type")
+                if llm_type in ALLOWED_TYPES and is_plausible_override(llm_type, profile["distinct_count"]):
+                    profile["inferred_type"] = llm_type
+                profile["description"] = review.get("description")
 
         coerce_types(df, profiles)
 
