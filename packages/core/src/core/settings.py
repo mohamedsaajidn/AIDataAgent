@@ -23,13 +23,6 @@ class Settings(BaseSettings):
     chroma_host: str = "localhost"
     chroma_port: int = 8001
 
-    # Which provider agent.llm.get_chat_model() routes to - "openrouter",
-    # "gemini" (Google AI Studio, API-key auth), or "vertex" (Google Cloud
-    # Vertex AI, project+ADC auth - see the vertex_* settings below, this is
-    # a different auth model from "gemini" despite both calling the same
-    # underlying Gemini models). Swapping this (plus the matching *_MODEL)
-    # is the one-line env change described in CLAUDE.md's "LLM provider"
-    # section.
     llm_provider: str = "openrouter"
 
     openrouter_api_key: str = ""
@@ -82,8 +75,7 @@ class Settings(BaseSettings):
     # environment where a user-login credential isn't available at all.
     vertex_credentials_path: str = ""
 
-    # Phase 7 observability (Arize Phoenix, self-hosted via docker-compose -
-    # see CLAUDE.md's "Guardrails" section for why Phoenix over Langfuse).
+    # Phase 7 observability.
     # gRPC, not the 6006 HTTP/UI port - that's what OTel's
     # OTLPSpanExporter/api.main's instrumentation setup actually dials.
     # False by default so a plain `uv sync` + no-Phoenix-container dev

@@ -63,13 +63,6 @@ services:
     volumes:
       - chroma_data:/chroma/chroma
 
-  # Phase 7 observability. Single container, SQLite-backed - chosen over
-  # Langfuse (v3 needs Postgres+ClickHouse+Redis+MinIO, 16GB min for itself
-  # alone) and Comet Opik (architecturally just as heavy) specifically
-  # because neither fits this machine's ~16GB total RAM. See CLAUDE.md's
-  # "Guardrails: PII enforcement & RBAC" / observability section for the
-  # full rationale. 6006 = UI + OTLP HTTP, 4317 = OTLP gRPC (what
-  # api.main's instrumentation actually exports to).
   phoenix:
     image: arizephoenix/phoenix:latest
     ports:

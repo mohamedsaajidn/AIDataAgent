@@ -26,10 +26,7 @@ async def upload_dataset(file: UploadFile, user_id: str = Form(...)) -> dict:
 
 @router.get("")
 def list_datasets(user_id: str) -> dict:
-    # Scoped to the requesting user's own uploads - datasets from before
-    # ownership existed (uploaded_by_user_id IS NULL) are unlisted here by
-    # design, not shown to everyone as a "shared" fallback. See "Dataset
-    # visibility" in CLAUDE.md for what this does and doesn't enforce.
+
     user = get_or_create_user(user_id)
     with get_session() as session:
         datasets = session.scalars(

@@ -1,7 +1,5 @@
 """Phase 7 observability wiring - OpenTelemetry traces exported to a
-self-hosted Arize Phoenix instance (see CLAUDE.md's "Guardrails" section for
-why Phoenix over Langfuse: this machine can't run Langfuse's 16GB-minimum
-stack). `setup_tracing()` is called once, from apps.api.main's lifespan,
+self-hosted Arize Phoenix instance. `setup_tracing()` is called once, from apps.api.main's lifespan,
 before any graph runs - never instantiate a tracer/instrumentor anywhere
 else, and never call this more than once per process.
 

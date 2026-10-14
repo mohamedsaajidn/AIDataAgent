@@ -6,9 +6,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
-/** Charts/EDA reports come back as self-contained HTML (inline plotly.js -
- * see CLAUDE.md's sandbox notes on why include_plotlyjs=True is
- * non-negotiable). Rendered in a sandboxed iframe so that HTML never runs
+/** Charts/EDA reports come back as self-contained HTML. Rendered in a sandboxed iframe so that HTML never runs
  * with access to this app's DOM/cookies/storage.
  *
  * Shown at a modest inline size that fits the chat column, with an expand

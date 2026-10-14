@@ -44,20 +44,6 @@ MAX_ATTEMPTS = 3
 EXECUTION_TIMEOUT_SECONDS = 20
 EDA_TIMEOUT_SECONDS = 45
 
-# Execution artifacts (chart.html/eda.html/result.parquet) are raw bytes,
-# often several MB (inline plotly.js alone is ~4MB - see packages/sandbox
-# notes in CLAUDE.md for why include_plotlyjs=True is non-negotiable).
-# `build_qa_graph()` is a real LangGraph StateGraph, so every node's full
-# state gets auto-traced as span input/output once Phase 7 observability is
-# on - a multi-MB value living in QAState for even one node (let alone the
-# several between execute and respond) is enough to blow past Phoenix's
-# OTLP gRPC receive limit and silently drop whole export batches, verified
-# live (see CLAUDE.md's "Observability" section - this is the same failure
-# class the orchestrator's artifact_ref/_artifact_sidecar exists for).
-# `_node_execute` stashes the real bytes here and puts only a small ref +
-# the key names (needed by `_node_verify`'s presence checks) into state;
-# `ask()` and orchestrator._extract_tool_result (run_route()'s caller) pop
-# the real bytes back out here, never through traced state.
 _artifact_sidecar: dict[str, dict[str, bytes]] = {}
 
 
