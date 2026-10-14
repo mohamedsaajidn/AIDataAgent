@@ -20,7 +20,7 @@ _ALLOWED_FILTER_OPS = {"eq", "ne", "gt", "gte", "lt", "lte", "in"}
 # column directly (no x grouping); scatter plots raw x/y pairs, not groups;
 # box/violin's optional x is dropped entirely for a non-categorical column
 # regardless (see _validate_box) - a real ask, deliberately out of scope for
-# now, see CLAUDE.md.
+# now.
 DATE_PART_CHART_TYPES = {"bar", "pie", "donut", "line", "area"}
 DATE_PARTS = {"year", "month", "quarter"}
 

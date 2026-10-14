@@ -24,11 +24,6 @@ def ingest_file(filename: str, content: bytes, user_id: str) -> list[dict]:
     user = get_or_create_user(user_id)
     content_hash = hashlib.sha256(content).hexdigest()
 
-    # Dedup is per-(content, uploader): re-uploading the exact same file
-    # yourself reuses your existing dataset, but a different user uploading
-    # identical bytes gets their own copy - datasets are scoped per user
-    # (see "Dataset visibility" in CLAUDE.md), so reusing someone else's row
-    # here would silently hand them a dataset they don't own.
     cached = _find_existing(content_hash, user.id)
     if cached:
         return cached

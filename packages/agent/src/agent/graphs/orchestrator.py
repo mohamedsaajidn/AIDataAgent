@@ -5,8 +5,7 @@ question: a single classification into one of a closed set of routes
 doesn't fit that enum - a follow-up asking to interpret a prior result, a
 "yes" confirming something the agent itself just offered, or plain
 conversation (greetings, thanks) all got force-fit into "clarify" in
-practice, which is what caused a real clarify-loop bug (see CLAUDE.md's
-Q&A agent section / git history around that fix).
+practice, which is what caused a real clarify-loop bug.
 
 This graph keeps every safety-critical, deterministic piece of graphs.qa
 completely intact - the sandbox execute/verify/retry loop, chart spec
@@ -79,7 +78,7 @@ MAX_TOOL_ROUNDS = 3
 
 # A chart/EDA artifact is inline HTML with plotly.js embedded
 # (packages/sandbox's fig.write_html(..., include_plotlyjs=True) - always
-# True, never "cdn", see CLAUDE.md's sandbox notes for why) - genuinely
+# True, never "cdn") - genuinely
 # several MB. OrchestratorState is a LangGraph state dict, and
 # LangChainInstrumentor auto-traces every node's full state as span
 # input/output, so putting that much content directly in state means EVERY
@@ -341,8 +340,7 @@ def _extract_chart_body(html: str) -> str:
     """Pulls just a chart's own rendered content (its inline plotly.js copy
     + its plot div/script) out of the full standalone document
     fig.write_html(..., include_plotlyjs=True) produces. Each chart embeds
-    its own plotly.js inside <body> (see CLAUDE.md's sandbox notes on why
-    include_plotlyjs is always True, never "cdn"), so the extracted
+    its own plotly.js inside <body>, so the extracted
     fragment is fully self-contained - nothing from the original <head> is
     needed to render it standalone inside a shared wrapper page."""
     match = _BODY_RE.search(html)

@@ -240,9 +240,7 @@ def get_dataset_sample(dataset_id: str, version_id: str | None, limit: int) -> d
     export_version.
 
     PII columns are redacted server-side via the same tools.pii.
-    redact_pii_from_result the agent path uses on every route (see CLAUDE.md's
-    "Guardrails: PII enforcement" - a redaction chokepoint, not a
-    frontend-only hiding convention) rather than trusting the frontend to
+    redact_pii_from_result the agent path uses on every route rather than trusting the frontend to
     correctly hide something it was already sent.
     """
     settings = get_settings()

@@ -22,13 +22,6 @@ class AskRequest(BaseModel):
     question: str
     user_id: str
     session_id: str | None = None
-    # agent.graphs.orchestrator (tool-calling architecture) is the default
-    # Q&A engine as of Phase 7 - see CLAUDE.md's "Q&A agent architecture"
-    # section for why. agent.graphs.qa (the original fixed router) is kept
-    # as a documented, deliberately-not-deleted fallback: set this to true
-    # to roll a request back to it, e.g. while debugging whether a given
-    # issue is specific to the orchestrator. No UI toggle for this - it's an
-    # operator/debugging escape hatch, not a user-facing choice.
     use_legacy_qa_graph: bool = False
 
 

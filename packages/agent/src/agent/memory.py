@@ -2,8 +2,7 @@
 
 Short-term: the last N (question, answer) turns for a chat session, so a
 follow-up like "what about the median" can actually see the prior turn
-instead of relying on the schema alone to guess the right column (the
-Phase 3 limitation documented in CLAUDE.md). Stored in Redis, not
+instead of relying on the schema alone to guess the right column. Stored in Redis, not
 process memory, specifically so it survives an API server restart - the
 `ChatSession`/`ChatMessage` rows in Postgres are the permanent record, but
 they're not indexed for "give me the last N turns fast" the way a capped

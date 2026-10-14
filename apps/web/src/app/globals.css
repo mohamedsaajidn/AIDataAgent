@@ -48,10 +48,7 @@
     --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-/* Palette carried over from the old apps/web/src/index.css design tokens
-   (purple brand accent, warm-gray text/surfaces) - see CLAUDE.md's
-   frontend rewrite notes. Old --accent (the purple brand color) maps to
-   shadcn's --primary; shadcn's own --accent stays a subtle hover tint. */
+
 :root {
     --background: #ffffff;
     --foreground: #08060d;

@@ -92,10 +92,6 @@ class User(Base):
     or auto-created on first use. This is an identity anchor, not a login
     system - it exists so long-term memory has something stable to key on
     across sessions.
-
-    RBAC (viewer/editor roles) was built in Phase 7 and later removed - see
-    CLAUDE.md's "Guardrails" section for why. There is currently no
-    permission distinction between users at all.
     """
 
     __tablename__ = "users"
