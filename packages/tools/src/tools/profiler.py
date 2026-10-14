@@ -91,8 +91,14 @@ def _infer_type(
     if looks_high_cardinality and pd.api.types.is_integer_dtype(series):
         return "id", False
 
+    # pandas 3.x reads CSV string columns as its new `str`/StringDtype by
+    # default, not the legacy `object` dtype - is_object_dtype alone stopped
+    # matching any string column (confirmed: pandas 3.0.6, pd.read_csv gives
+    # dtype "str", is_object_dtype() -> False, is_string_dtype() -> True),
+    # which silently disabled datetime detection for every text column.
     if pd.api.types.is_datetime64_any_dtype(series) or (
-        pd.api.types.is_object_dtype(series) and _looks_like_datetime(non_null)
+        (pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series))
+        and _looks_like_datetime(non_null)
     ):
         return "datetime", False
 

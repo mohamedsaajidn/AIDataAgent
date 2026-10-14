@@ -41,7 +41,7 @@ export default function NewChatPage() {
     return (
       <div className="flex h-full flex-col">
         <div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
-          <MessageList messages={messages} userId={userId} pending={askMutation.isPending} />
+          <MessageList messages={messages} pending={askMutation.isPending} />
         </div>
         <div className="border-t border-border">
           <ChatInput userId={userId} disabled onSend={() => {}} />

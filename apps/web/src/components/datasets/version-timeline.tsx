@@ -6,25 +6,20 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CollapsibleCode } from "@/components/common/collapsible-code";
 import { EmptyState } from "@/components/common/empty-state";
-import { useCurrentUserRole } from "@/hooks/use-current-user";
 import { useSetActiveVersion, useVersions } from "@/hooks/use-transforms";
 import { exportUrl } from "@/lib/api/datasets";
 import { formatDate } from "@/lib/utils";
 import type { ExportFormat } from "@/lib/types/api";
 
-export function VersionTimeline({ datasetId, userId }: { datasetId: string; userId: string }) {
+export function VersionTimeline({ datasetId }: { datasetId: string }) {
   const { data, isLoading } = useVersions(datasetId);
-  const { data: whoami } = useCurrentUserRole(userId);
   const setActiveVersionMutation = useSetActiveVersion(datasetId);
-
-  const canEdit = whoami?.role === "editor";
 
   async function handleMakeActive(versionId: string) {
     try {
-      await setActiveVersionMutation.mutateAsync({ versionId, userId });
+      await setActiveVersionMutation.mutateAsync(versionId);
       toast.success("Active version updated.");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
@@ -65,21 +60,14 @@ export function VersionTimeline({ datasetId, userId }: { datasetId: string; user
             {v.generated_code && <CollapsibleCode code={v.generated_code} label="Show transformation code" />}
             <div className="flex flex-wrap items-center gap-2 pt-1">
               {!isActive && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={!canEdit || setActiveVersionMutation.isPending}
-                        onClick={() => handleMakeActive(v.id)}
-                      >
-                        Make active (undo/redo)
-                      </Button>
-                    </span>
-                  </TooltipTrigger>
-                  {!canEdit && <TooltipContent>Requires the editor role.</TooltipContent>}
-                </Tooltip>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={setActiveVersionMutation.isPending}
+                  onClick={() => handleMakeActive(v.id)}
+                >
+                  Make active (undo/redo)
+                </Button>
               )}
               {(["csv", "xlsx", "parquet"] as ExportFormat[]).map((fmt) => (
                 <Button key={fmt} size="sm" variant="ghost" asChild>

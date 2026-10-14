@@ -77,7 +77,7 @@ export default function ChatSessionPage() {
         {stillLoading ? (
           <MessageListSkeleton />
         ) : (
-          <MessageList messages={messages} userId={userId} pending={askMutation.isPending} />
+          <MessageList messages={messages} pending={askMutation.isPending} />
         )}
       </div>
       <div className="border-t border-border">
@@ -125,11 +125,7 @@ export default function ChatSessionPage() {
       </ResizablePanel>
       <ResizableHandle />
       <ResizablePanel defaultSize={26} minSize={18} maxSize={55} className="min-w-0">
-        <VersionSidebar
-          datasetId={focusedVersionDatasetId}
-          userId={userId}
-          onCollapse={() => setVersionSidebarOpen(false)}
-        />
+        <VersionSidebar datasetId={focusedVersionDatasetId} onCollapse={() => setVersionSidebarOpen(false)} />
       </ResizablePanel>
     </ResizablePanelGroup>
   );

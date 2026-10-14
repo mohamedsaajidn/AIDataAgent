@@ -21,8 +21,7 @@ export function useDatasetSample(datasetId: string | null, limit = 30) {
 export function useConfirmTransform() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (params: { pendingId: string; userId: string }) =>
-      confirmTransform(params.pendingId, params.userId),
+    mutationFn: (pendingId: string) => confirmTransform(pendingId),
     onSuccess: () => {
       // The dataset this transform targeted isn't known here (a chat
       // message's TransformCard has no reliable dataset id - see
@@ -46,8 +45,7 @@ export function useRejectTransform() {
 export function useSetActiveVersion(datasetId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (params: { versionId: string; userId: string }) =>
-      setActiveVersion(datasetId, params.versionId, params.userId),
+    mutationFn: (versionId: string) => setActiveVersion(datasetId, versionId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["versions", datasetId] });
       queryClient.invalidateQueries({ queryKey: ["dataset", datasetId] });
