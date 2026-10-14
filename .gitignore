@@ -9,14 +9,8 @@ build/
 .ruff_cache/
 uv.lock.bak
 scripts/chart_output/
-# Ephemeral Playwright MCP tool output (browser snapshots/console logs/
-# screenshots generated while testing the app in-session) - not project
-# artifacts, shouldn't be committed.
+
 .playwright-mcp/
 
-# Claude Code's local project config/instructions - kept locally (same
-# gitignored-per-developer pattern as .env) so the assistant keeps working,
-# but not published. See ARCHITECTURE.md for the public-facing writeup of
-# the same architecture/decisions this covers.
 .claude/
 CLAUDE.md
