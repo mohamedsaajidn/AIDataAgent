@@ -12,12 +12,7 @@ dependencies = [
 
 [tool.uv]
 package = false
-# This machine sits behind a TLS-intercepting corporate proxy (Zscaler) that
-# breaks certificate validation for some external hosts (GitHub Releases,
-# notably the spaCy model wheel). Setting this here - rather than relying on
-# the UV_SYSTEM_CERTS env var - means it applies no matter which terminal or
-# shell invokes uv, since env vars have repeatedly failed to propagate to
-# freshly opened terminals in practice.
+
 system-certs = true
 
 [tool.uv.sources]
@@ -29,8 +24,7 @@ api = { workspace = true }
 
 [tool.uv.workspace]
 members = ["apps/*", "packages/*"]
-# apps/web is a Node/Vite frontend, not a uv workspace member - it has no
-# pyproject.toml on purpose, so it must be excluded rather than matched.
+
 exclude = ["apps/web"]
 
 [dependency-groups]
