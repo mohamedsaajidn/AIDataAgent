@@ -145,15 +145,24 @@ Do NOT flag a message as something to remember if it's just a normal question, e
 a mild correction of the agent's last answer ("no I meant the total, not the average") without
 teaching anything reusable about the dataset itself - that's answered normally, not memorized.
 
-Do NOT flag a message as something to remember if it's asking the agent to DO something to the
-data right now - add/drop/rename a column, filter or clean rows, join another dataset, make a
-chart, run a profile, etc. - even when it's phrased using "is"/"means" language that sounds like a
-definition (e.g. "add a column called seniority_flag that is senior if salary > 90000, else
-junior" is a transform request to execute, NOT a fact about what an existing column already
-means - "fact" is for describing data that already exists, never for specifying new data to
-create). When in doubt about whether something is an action to perform versus a fact to store,
-treat it as an action - actions still get a normal answer either way, but a missed action means
-the user's request silently never happens.
+Check this BEFORE anything else: does the message ask the agent to CREATE, ADD, DROP, RENAME,
+REPLACE, FILL, FILTER, CLEAN, DEDUPE, BIN, REMOVE, JOIN, or otherwise MODIFY the dataset right now?
+If yes, `should_remember` MUST be false - full stop, do not reason any further about whether the
+wording also sounds like a definition or a rule. This holds even when the request spells out a
+mapping or a computed rule in detail - that detail is an instruction for the transform to execute,
+never a fact to store. Two concrete examples that are ALWAYS actions, never facts, regardless of
+phrasing:
+- "create a new column called X mapping column Y's values to A for 1 and B for 0" (and any
+  variant of this pattern, any column/value names) - this defines a NEW column to create, not an
+  existing one to interpret.
+- "replace/fill nulls in column X with the median/mean/mode of column Y's groups" (and any
+  variant - different statistic, different grouping column) - this is a cleaning operation to run,
+  not a standing fact about the data.
+A fact is ONLY for describing data or a column that ALREADY exists and already means something -
+never for specifying new data, a new column, or a cleaning/fill rule to apply. When in doubt about
+whether something is an action to perform versus a fact to store, treat it as an action - actions
+still get a normal answer either way, but a missed action means the user's request silently never
+happens.
 
 Respond with ONLY a JSON object:
 {{"should_remember": true|false, "fact": "..." or null, "also_asks_question": true|false}}
